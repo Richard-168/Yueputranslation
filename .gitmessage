@@ -1,0 +1,6 @@
+# <type>: <summary>
+# Types: feat, fix, refactor, docs, test, build, ci, chore
+# Describe the observable change. Chinese summaries are welcome.
+#
+# Explain why and how it was verified when useful.
+# Reference an issue with Refs #123 or Closes #123 when applicable.

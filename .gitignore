@@ -1,0 +1,45 @@
+# Local environments and build products
+.venv/
+.uv-cache/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Model weights, native runtimes and private session data (kept locally)
+models/
+runtime/
+downloads/
+outputs/
+*.onnx
+*.gguf
+*.wav
+*.mp3
+*.m4a
+*.flac
+*.mp4
+*.log
+
+# Internal planning and historical experiment journals
+/dev-docs/
+/experiments/offline-poc/README.md
+/experiments/offline-poc/WINDOWS-使用说明.md
+/experiments/offline-poc/desktop-tool-scope.json
+
+# Secrets and machine-specific files
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.pfx
+*.p12
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

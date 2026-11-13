@@ -1,0 +1,26 @@
+name: 故障报告
+description: 提交可以复现的界面、识别或翻译问题
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: 请勿上传私人录音、密钥或未获授权的音乐。安全漏洞请先阅读 SECURITY.md。
+  - type: textarea
+    id: environment
+    attributes:
+      label: 运行环境
+      description: Windows / Python 版本、提交版本、CPU，以及声音来源和翻译方向。
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 说明操作步骤、预期行为及实际行为。
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 匿名错误信息或截图
+      description: 可以使用自己编写的短句；附公开音源时说明时间段，不要公开完整私人会话。

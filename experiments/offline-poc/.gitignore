@@ -1,0 +1,7 @@
+.venv/
+.uv-cache/
+models/
+runtime/
+downloads/
+outputs/
+__pycache__/

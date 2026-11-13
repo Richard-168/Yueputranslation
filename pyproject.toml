@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools==84.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "yuepu-translate"
+version = "0.1.0.dev0"
+description = "Experimental offline Cantonese and Mandarin desktop interpreter"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{name = "YuePuTranslate contributors"}]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Operating System :: Microsoft :: Windows",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Multimedia :: Sound/Audio :: Speech",
+]
+dependencies = [
+  "cn2an==0.5.24",
+  "PySide6-Essentials==6.8.3",
+]
+
+[project.optional-dependencies]
+offline = [
+  "numpy==2.5.4",
+  "soundfile==0.14.0",
+  "sounddevice==0.5.6",
+  "sherpa-onnx==2.0.1",
+  "onnxruntime==1.31.1",
+  "canto-tts==0.1.4",
+  "canto-hk-g2p==2.6.1",
+  "OpenCC==1.4.2",
+  "soxr==1.0.0",
+  "PyAudioWPatch==0.2.12.8; sys_platform == 'win32'",
+  "piper-phonemize @ https://github.com/csukuangfj/piper-phonemize/releases/download/v1.5.9/piper_phonemize-1.5.9-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
+]
+dev = ["ruff==0.16.5", "build==1.6.0"]
+diagnostics = ["av==16.0.1", "psutil>=7,<8", "Pillow>=11,<13"]
+
+[project.scripts]
+yuepu-translate = "yuepu_translate.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+extend-exclude = ["dev-docs", "models", "runtime", "outputs", "downloads", ".uv-cache", ".venv"]
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

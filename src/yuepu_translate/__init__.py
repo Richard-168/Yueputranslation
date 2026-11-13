@@ -1,0 +1,1 @@
+"""YuePuTranslate desktop interpreter."""

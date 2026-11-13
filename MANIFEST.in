@@ -1,0 +1,15 @@
+include LICENSE README.md CONTRIBUTING.md CODE_OF_CONDUCT.md SECURITY.md THIRD_PARTY.md
+include Start-YuePu.cmd
+recursive-include docs *.md
+recursive-include tests *.py
+include experiments/offline-poc/*.py
+include experiments/offline-poc/*.cmd
+include experiments/offline-poc/*.jinja
+prune dev-docs
+prune experiments/offline-poc/outputs
+prune experiments/offline-poc/models
+prune experiments/offline-poc/runtime
+prune experiments/offline-poc/downloads
+prune experiments/offline-poc/.venv
+prune experiments/offline-poc/.uv-cache
+global-exclude *.py[cod] *.onnx *.gguf *.wav *.mp3 *.m4a *.log
