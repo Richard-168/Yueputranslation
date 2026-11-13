@@ -155,11 +155,25 @@ def hf_specs(component: str) -> list[dict]:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("components", nargs="+", choices=[*SOURCES, "runtime", "mandarin", "vad"])
+    parser.add_argument(
+        "components", nargs="+", choices=[*SOURCES, "runtime", "mandarin", "vad", "song-separator"]
+    )
     args = parser.parse_args()
     ROOT.mkdir(parents=True, exist_ok=True)
     specs = []
     for component in args.components:
+        if component == "song-separator":
+            specs.append(
+                {
+                    "component": component,
+                    "revision": "sha256 pinned; upstream asset 108817997",
+                    "url": "https://github.com/TRvlvr/model_repo/releases/download/all_public_uvr_models/Kim_Vocal_2.onnx",
+                    "local_path": "models/song-separator/Kim_Vocal_2.onnx",
+                    "size": 66759214,
+                    "sha256": "ce74ef3b6a6024ce44211a07be9cf8bc6d87728cc852a68ab34eb8e58cde9c8b",
+                }
+            )
+            continue
         if component == "vad":
             specs.append(
                 {

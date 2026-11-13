@@ -51,6 +51,7 @@ from PySide6.QtWidgets import (
 
 from .desktop_engine import AudioPlayer, Cancelled, Engine, Microphone, Request, SystemAudio
 from .paths import DATA_DIR
+from .song_pipeline import SongFile, SongSession
 from .transcript_model import TranscriptEntry, TranscriptModel
 
 ROOT = DATA_DIR
@@ -304,6 +305,10 @@ class Window(QMainWindow):
             lambda message: self.events.put((self.epoch, 0, "audio_error", message)), muted=muted
         )
         self.microphone = None
+        self.song_session = None
+        self.song_keys = {}
+        self.song_final_block = -1
+        self.song_file_vocals = False
         self.epoch = self.pending = 0
         self.sequence = 0
         self.ready = self.listening = self.closing = False
@@ -311,6 +316,7 @@ class Window(QMainWindow):
         self.active_ids = set()
         self.unread = 0
         self._build()
+        self.source_changed()
         self.worker = threading.Thread(target=self._worker, daemon=True)
         self.worker.start()
         self.timer = QTimer(self)
@@ -404,6 +410,13 @@ class Window(QMainWindow):
         languages.addWidget(self.swap_button)
         languages.addStretch()
         self.count_label = QLabel("0 条字幕")
+        languages.addWidget(QLabel("识别模式"))
+        self.profile_box = QComboBox()
+        self.profile_box.addItems(["会话", "段落修订（实验）"])
+        self.profile_box.setAccessibleName("识别模式")
+        self.profile_box.currentIndexChanged.connect(self.source_changed)
+        languages.addWidget(self.profile_box)
+        languages.addStretch()
         self.count_label.setObjectName("muted")
         languages.addWidget(self.count_label)
         area.addWidget(language_bar)
@@ -510,7 +523,16 @@ class Window(QMainWindow):
             self.direction_box.setCurrentIndex(1 - self.direction_box.currentIndex())
 
     def source_changed(self):
-        if self.source_box.currentIndex() == 1:
+        if hasattr(self, "profile_box") and self.profile_box.currentIndex() == 1:
+            self.mode_hint.setText(
+                "连续更新同段字幕；句末复核识别和译文，较早稳定的前文逐步固定。"
+                + (
+                    "设备收音期间仅字幕。"
+                    if self.source_box.currentIndex() == 1
+                    else "句末确认后播报译音。"
+                )
+            )
+        elif self.source_box.currentIndex() == 1:
             self.mode_hint.setText(
                 "设备声音：获取默认扬声器／耳机的混合声音。收音期间仅字幕，停止后可播报。"
             )
@@ -546,10 +568,11 @@ class Window(QMainWindow):
             else "开始收音"
         )
         self.stop_button.setEnabled(bool(self.pending or self.listening or self.player.busy))
-        for box in (self.direction_box, self.source_box, self.swap_button):
+        for box in (self.direction_box, self.source_box, self.swap_button, self.profile_box):
             box.setEnabled(idle and not self.listening)
         for button in (self.translate_button, self.file_button):
             button.setEnabled(self.ready and idle and not self.listening)
+        self.file_button.setText("打开歌曲" if self.profile_box.currentIndex() == 1 else "打开音频")
         self.auto_box.setEnabled(not (self.listening and self.source_box.currentIndex() == 1))
         self.replay_button.setEnabled(
             self.ready
@@ -638,12 +661,30 @@ class Window(QMainWindow):
     def open_audio(self, path=None):
         if self.pending or self.listening or not self.ready:
             return
+        song = self.profile_box.currentIndex() == 1
         if not path or isinstance(path, bool):
             path, _ = QFileDialog.getOpenFileName(
-                self, "选择不超过 15 秒的音频", str(ROOT), "WAV 音频 (*.wav)"
+                self,
+                "选择歌曲（最多 10 分钟）" if song else "选择不超过 15 秒的音频",
+                str(ROOT),
+                "歌曲音频 (*.mp3 *.wav *.flac *.ogg)" if song else "WAV 音频 (*.wav)",
             )
         if path:
             self.cancel.clear()
+            if song:
+                try:
+                    task = SongFile(path, self.source_language(), vocals=self.song_file_vocals)
+                except (OSError, ValueError, RuntimeError) as exc:
+                    self.status(str(exc), True)
+                    return
+                self.song_keys.clear()
+                self.song_final_block = -1
+                self.song_session = task
+                self.pending += 1
+                self.jobs.put_nowait((self.epoch, 0, task))
+                self.status("正在准备歌曲文件处理…")
+                self._buttons()
+                return
             self.submit(
                 Request(
                     self.epoch,
@@ -682,7 +723,16 @@ class Window(QMainWindow):
 
     def toggle_capture(self):
         if self.listening:
-            self.stop()
+            if self.song_session is not None:
+                self.listening = False
+                if self.microphone:
+                    self.microphone.stop()
+                    self.microphone = None
+                self.song_session.mailbox.finish()
+                self.status("已停止收音，正在确认末尾字幕；可点“停止”取消等待。")
+                self._buttons()
+            else:
+                self.stop()
             return
         if not self.ready or self.pending or self.closing:
             return
@@ -690,6 +740,19 @@ class Window(QMainWindow):
         self.listening = True
         epoch = self.epoch
         source, auto, mode = self.source_language(), self.auto_box.isChecked(), self.number_mode
+
+        if self.profile_box.currentIndex() == 1:
+            self.player.stop()
+            self.song_keys.clear()
+            self.song_final_block = -1
+            self.song_session = SongSession(
+                source, autoplay=auto and self.source_box.currentIndex() == 0, number_mode=mode
+            )
+            self.pending += 1
+            self.jobs.put_nowait((epoch, 0, self.song_session))
+            self.status("正在准备歌曲识别…")
+            self._buttons()
+            return
 
         def segment(samples):
             self.events.put((epoch, 0, "segment", (samples, source, auto, mode)))
@@ -712,6 +775,39 @@ class Window(QMainWindow):
         )
         self._buttons()
 
+    def _start_song_capture(self):
+        if not self.listening or self.song_session is None:
+            return
+        epoch = self.epoch
+        session = self.song_session
+
+        def error(message):
+            self.events.put((epoch, 0, "capture_error", message))
+
+        if self.source_box.currentIndex() == 1:
+            self.microphone = SystemAudio(
+                session.mailbox.put,
+                error,
+                lambda name: self.events.put((epoch, 0, "capture_started", name)),
+                paragraph=True,
+            )
+        else:
+            self.microphone = Microphone(session.mailbox.put, error, paragraph=True)
+        self.microphone.start()
+        self.status("段落修订已开始，正在等待第一段人声…")
+
+    def _song_key(self, block):
+        if block not in self.song_keys:
+            self.sequence += 1
+            self.song_keys[block] = self.sequence
+            source = self.source_language()
+            entry = TranscriptEntry(
+                self.sequence, source, "zh" if source == "yue" else "yue", status="暂定字幕"
+            )
+            self.active_ids.add(self.sequence)
+            self._change_transcript(lambda: self.model.append(entry), new=True)
+        return self.song_keys[block]
+
     def stop(self):
         self.cancel.set()
         self.epoch += 1
@@ -719,6 +815,9 @@ class Window(QMainWindow):
         if self.microphone:
             self.microphone.stop()
             self.microphone = None
+        if self.song_session is not None:
+            self.song_session.mailbox.finish()
+            self.song_session = None
         self.player.stop()
         while True:
             try:
@@ -729,8 +828,10 @@ class Window(QMainWindow):
                 break
         for key in tuple(self.active_ids):
             item = self.model.by_key.get(key)
-            if item and not item.target:
-                self.model.update_entry(key, status="已取消")
+            if item and item.status != "已确认":
+                self.model.update_entry(
+                    key, status="已取消" if not item.target else "暂定 · 已停止"
+                )
         self.active_ids.clear()
         self.status(
             "正在停止处理，已有字幕已保留…"
@@ -754,6 +855,8 @@ class Window(QMainWindow):
                 if payload == "load":
                     self.engine.load(self.cancel, lambda message: emit("status", message))
                     emit("ready", True)
+                elif isinstance(payload, SongSession):
+                    payload.run(self.engine, self.player, self.cancel, emit)
                 else:
                     self.engine.process(payload, self.cancel, self.player, emit)
                     emit("done", True)
@@ -802,10 +905,77 @@ class Window(QMainWindow):
                 self.status(f"译音已生成 · 本句用时 {value:.1f} 秒")
             elif kind == "capture_started":
                 self.status(f"正在获取设备声音：{value}（仅字幕）")
+            elif kind == "song_ready":
+                self._start_song_capture()
+            elif kind == "song_source":
+                if value["block"] <= self.song_final_block:
+                    continue
+                row_key = self._song_key(value["block"])
+                fields = dict(
+                    source=value["text"], status="句末复核" if value["final"] else "暂定 · 翻译中"
+                )
+                if self.model.by_key[row_key].source != value["text"]:
+                    fields["target"] = value.get("frozen_target", "")
+                self._change_transcript(lambda: self.model.update_entry(row_key, **fields))
+            elif kind == "song_translation":
+                if value["block"] <= self.song_final_block:
+                    continue
+                row_key = self._song_key(value["block"])
+                self._change_transcript(
+                    lambda: self.model.update_entry(
+                        row_key,
+                        target=value["text"],
+                        status=(
+                            "已确认"
+                            if value["final"]
+                            else "前文已固定 · 末尾暂定"
+                            if value.get("frozen_characters", 0)
+                            else "暂定 · 待复核"
+                        ),
+                    )
+                )
+                if value["final"]:
+                    self.song_final_block = value["block"]
+                    self.active_ids.discard(row_key)
+                    self.song_keys.pop(value["block"], None)
+                self.status(
+                    f"{'片段确认' if value['final'] else '暂定字幕'} · "
+                    f"识别 {value['recognition_seconds']:.2f} 秒 · "
+                    f"翻译 {value['translation_seconds']:.2f} 秒"
+                )
+                self.status_label.setToolTip(
+                    f"输入窗口末尾至译文返回 {value['lag_seconds']:.2f} 秒；"
+                    "不代表逐字延迟，尚未计入本次绘制。"
+                )
+            elif kind == "song_empty":
+                self.song_final_block = max(self.song_final_block, value["block"])
+                row_key = self.song_keys.get(value["block"])
+                if row_key is not None:
+                    self.model.update_entry(
+                        row_key,
+                        source=value.get("source", ""),
+                        target=value.get("target", ""),
+                        status="前文已固定 · 末尾未确认"
+                        if value.get("partial")
+                        else "未检测到新内容",
+                    )
+                    self.active_ids.discard(row_key)
+                    self.song_keys.pop(value["block"], None)
+            elif kind == "song_drained":
+                self.song_session = None
+                self.status(
+                    "已保留固定前文，部分末尾没有有效字幕，尚未确认。"
+                    if isinstance(value, dict) and value.get("partial_count")
+                    else "本次没有生成有效字幕，已有记录已保留。"
+                    if isinstance(value, dict) and not value.get("confirmed_count")
+                    else "末尾字幕已确认 · 本次记录已保留，可回看或导出。"
+                )
             elif kind in ("capture_error", "audio_error"):
                 self.stop()
                 self.status(value, True)
             elif kind == "error":
+                if self.song_session is not None:
+                    self.stop()
                 self.model.update_entry(key, status="处理失败")
                 self.status(value, True)
             elif kind == "segment" and self.listening:
@@ -897,6 +1067,10 @@ class Window(QMainWindow):
         numbers.addItems(["按原文", "金额", "号码逐位"])
         numbers.setCurrentIndex(["original", "amount", "identifier"].index(self.number_mode))
         form.addRow("普通话数字读法", numbers)
+        vocals = QCheckBox("人声分离（较慢，仅处理歌曲文件）")
+        vocals.setChecked(self.song_file_vocals)
+        vocals.setEnabled(not self.pending and not self.listening)
+        form.addRow("高质量选项", vocals)
         note = QLabel(
             "字幕仅保存在本次会话内，关闭软件后释放。\n上限 10,000 条 / 原文译文合计 200 万字符。\n数字读音仍需核对；系统收音期间仅显示字幕。"
         )
@@ -914,6 +1088,7 @@ class Window(QMainWindow):
             if not self.view.smooth:
                 self.view.animation.stop()
             self.number_mode = ["original", "amount", "identifier"][numbers.currentIndex()]
+            self.song_file_vocals = vocals.isChecked()
             self.view.doItemsLayout()
             self.view.viewport().update()
 

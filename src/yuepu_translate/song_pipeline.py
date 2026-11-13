@@ -1,0 +1,280 @@
+"""Resident 1.7B song session. The UI owns capture and transcript retention."""
+
+import os
+import time
+from pathlib import Path
+
+import numpy as np
+
+from .local_inference import InferenceCancelled, LocalInference, check_cancel
+from .paragraphs import ParagraphRevision
+from .song_stream import SongMailbox, SongWindow, draft_fits, trim_context
+
+
+def make_voice_detector():
+    """Shared native voice gate for live and file audio."""
+    from .desktop_engine import make_vad
+
+    vad = make_vad()
+
+    def activity(frame):
+        if len(frame) < 512:
+            frame = np.pad(frame, (0, 512 - len(frame)))
+        vad.accept_waveform(frame)
+        while not vad.empty():
+            vad.pop()
+        return vad.is_speech_detected()
+
+    return activity
+
+
+def make_song_stream(emit):
+    """Native voice activity gates inference; it never cuts audio into UI rows."""
+    from .song_stream import RollingAudio
+
+    return RollingAudio(emit, detector=make_voice_detector())
+
+
+class SongSession:
+    def __init__(self, source, autoplay=False, number_mode="original"):
+        if source not in {"yue", "zh"}:
+            raise ValueError("请选择粤语或普通话方向。")
+        self.source, self.autoplay, self.number_mode = source, autoplay, number_mode
+        self.mailbox = SongMailbox()
+        self.file_mode = False
+
+    def windows(self, cancel, emit):
+        emit("song_ready", True)
+        while (window := self.mailbox.get(cancel)) is not None:
+            yield window
+
+    def run(self, engine, player, cancel, emit):
+        from .desktop_engine import UNSUPPORTED_SCRIPT, Cancelled
+
+        asr = LocalInference("asr", self.source, threads=min(12, os.cpu_count() or 4))
+        mt = LocalInference("translation", self.source, threads=min(12, os.cpu_count() or 4))
+        previous = ""
+        previous_end = -1
+        states = {}
+        cached_asr = None
+        confirmed_count = 0
+        partial_count = 0
+        seconds_per_audio, translation_cost = 0.16, 0.5
+
+        def close_empty(block):
+            nonlocal partial_count
+            state = states.pop(block, None)
+            value = dict(block=block)
+            if state is not None and state["revision"].frozen:
+                value.update(source=state["revision"].frozen, target=state["target"], partial=True)
+                partial_count += 1
+            emit("song_empty", value)
+
+        try:
+            emit("status", "正在加载 1.7B 连续识别与常驻翻译模型…")
+            asr.start(cancel)
+            mt.start(cancel)
+            mt.translate("你好。", cancel)
+            for window in self.windows(cancel, emit):
+                check_cancel(cancel)
+                if not draft_fits(window, seconds_per_audio, translation_cost, time.monotonic()):
+                    self.mailbox.coalesced += 1
+                    continue
+                if window.silent:
+                    if window.final:
+                        close_empty(window.block)
+                        # No context can be carried through an entirely quiet window.
+                        previous = ""
+                    continue
+                begin = time.perf_counter()
+                reused_asr = bool(
+                    not self.file_mode
+                    and window.final
+                    and cached_asr is not None
+                    and cached_asr[0] == window.block
+                    and cached_asr[2] >= window.voice_end
+                )
+                origin = window.start
+                if reused_asr:
+                    _, origin, _, text = cached_asr
+                else:
+                    text = engine.converters["zh"].convert(asr.transcribe(window.samples, cancel))
+                    cached_asr = (window.block, window.start, window.end, text)
+                if UNSUPPORTED_SCRIPT.search(text):
+                    raise ValueError("歌曲未识别为普通话、粤语或英文，请检查所选方向。")
+                if (
+                    not window.final
+                    and not window.checkpoint
+                    and self.mailbox.has_waiting_confirmation(window.block)
+                ):
+                    # The completed ASR remains reusable for coverage checks;
+                    # do not translate a draft whose confirmation is already queued.
+                    continue
+                if not any(c.isalnum() for c in text):
+                    if window.final:
+                        close_empty(window.block)
+                    continue
+                if window.final and not self.file_mode:
+                    text = mt.punctuate(text, cancel)
+                state = states.setdefault(
+                    window.block,
+                    dict(
+                        revision=ParagraphRevision(),
+                        start=window.start,
+                        target="",
+                        cached_source="",
+                        cached_target="",
+                        speech=[],
+                    ),
+                )
+                if self.file_mode:
+                    current = trim_context(previous, text) if window.start < previous_end else text
+                    if not any(c.isalnum() for c in current):
+                        previous, previous_end = "", window.end
+                        close_empty(window.block)
+                        continue
+                else:
+                    current = text
+                revision = state["revision"].update(
+                    current,
+                    origin,
+                    state["revision"].version + 1,
+                    (window.end - state["start"]) / 16000,
+                    final=window.final,
+                )
+                if revision is None:
+                    continue
+                emit(
+                    "song_source",
+                    dict(
+                        block=window.block,
+                        text=revision.source,
+                        final=window.final,
+                        frozen_characters=len(state["revision"].frozen),
+                        frozen_target=state["target"],
+                    ),
+                )
+                recognized = time.perf_counter()
+                if not reused_asr:
+                    seconds_per_audio = (recognized - begin) / (len(window.samples) / 16000)
+
+                def translate_unconfirmed(source):
+                    if not source.strip():
+                        return ""
+                    if source == state["cached_source"]:
+                        return state["cached_target"]
+                    target = mt.translate(source, cancel)
+                    state["cached_source"], state["cached_target"] = source, target
+                    return target
+
+                if revision.frozen_delta.strip():
+                    confirmed = translate_unconfirmed(revision.frozen_delta)
+                    state["target"] += confirmed
+                    state["speech"].append(confirmed)
+                translated = state["target"] + translate_unconfirmed(revision.tail)
+                translation_cost = time.perf_counter() - recognized
+                check_cancel(cancel)
+                emit(
+                    "song_translation",
+                    dict(
+                        block=window.block,
+                        text=translated,
+                        final=window.final,
+                        recognition_seconds=recognized - begin,
+                        translation_seconds=time.perf_counter() - recognized,
+                        lag_seconds=time.monotonic() - window.captured_at,
+                        audio_seconds=len(window.samples) / 16000,
+                        coalesced=self.mailbox.coalesced,
+                        reused_asr=reused_asr,
+                        frozen_characters=len(state["revision"].frozen),
+                    ),
+                )
+                if window.final:
+                    confirmed_count += 1
+                    previous = text
+                    previous_end = window.end
+                    # Only confirmed passages may reach TTS. System capture passes False.
+                    if self.autoplay:
+                        target = "zh" if self.source == "yue" else "yue"
+                        for confirmed in state["speech"]:
+                            engine.speak(
+                                confirmed, target, self.number_mode, player, cancel, lambda: None
+                            )
+                    states.pop(window.block, None)
+            check_cancel(cancel)
+            emit("song_drained", dict(confirmed_count=confirmed_count, partial_count=partial_count))
+        except InferenceCancelled:
+            raise Cancelled() from None
+        finally:
+            self.mailbox.finish()
+            asr.stop()
+            mt.stop()
+            asr.close()
+            mt.close()
+
+
+class SongFile(SongSession):
+    """Longer offline blocks for files; separation is opt-in, never a live default."""
+
+    def __init__(self, path, source, vocals=False):
+        super().__init__(source)
+        self.file_mode = True
+        self.path = Path(path)
+        self.vocals = vocals
+        import soundfile as sf
+
+        if not self.path.is_file() or self.path.stat().st_size > 100 * 1024 * 1024:
+            raise ValueError("请选择不超过 100 MB 的本地歌曲音频。")
+        info = sf.info(self.path)
+        if (
+            not 0 < info.duration <= 600
+            or info.channels not in {1, 2}
+            or not 8000 <= info.samplerate <= 192000
+        ):
+            raise ValueError("歌曲文件仅支持不超过 10 分钟的单声道或双声道音频。")
+
+    def windows(self, cancel, emit):
+        import soundfile as sf
+        import soxr
+
+        emit("status", "正在读取歌曲文件…")
+        # Recheck the header and bound the read even if the file changed after selection.
+        info = sf.info(self.path)
+        if not 8000 <= info.samplerate <= 192000 or info.channels not in {1, 2}:
+            raise ValueError("歌曲文件格式已改变，请重新选择。")
+        audio, rate = sf.read(
+            self.path, frames=info.samplerate * 600 + 1, dtype="float32", always_2d=True
+        )
+        if not 0 < len(audio) <= rate * 600 or not np.isfinite(audio).all():
+            raise ValueError("歌曲文件为空、超长或包含无效音频。")
+        check_cancel(cancel)
+        if self.vocals:
+            from .vocals import separate_vocals
+
+            if rate != 44100:
+                audio = soxr.resample(audio, rate, 44100)
+            if audio.shape[1] == 1:
+                audio = np.repeat(audio, 2, axis=1)
+            audio = separate_vocals(audio, cancel, lambda text: emit("status", text))
+            rate = 44100
+        mono = np.ascontiguousarray(audio.mean(axis=1), dtype=np.float32)
+        if rate != 16000:
+            mono = soxr.resample(mono, rate, 16000)
+        emit("status", "正在检测歌曲文件中的人声区间…")
+        detector = make_voice_detector()
+        activity = np.zeros((len(mono) + 511) // 512, dtype=bool)
+        for index, offset in enumerate(range(0, len(mono), 512)):
+            check_cancel(cancel)
+            activity[index] = detector(mono[offset : offset + 512])
+        for block, start in enumerate(range(0, len(mono), 26 * 16000)):
+            check_cancel(cancel)
+            end = min(start + 30 * 16000, len(mono))
+            if not activity[start // 512 : (end + 511) // 512].any():
+                if end == len(mono):
+                    break
+                continue
+            tick = time.monotonic()
+            emit("status", f"正在处理歌曲 {start / 16000:.0f}–{end / 16000:.0f} 秒…")
+            yield SongWindow(block, start, end, mono[start:end], True, tick, tick)
+            if end == len(mono):
+                break

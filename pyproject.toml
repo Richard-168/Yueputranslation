@@ -9,7 +9,7 @@ description = "Experimental offline Cantonese and Mandarin desktop interpreter"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "licenses/*.txt"]
 authors = [{name = "YuePuTranslate contributors"}]
 classifiers = [
   "Development Status :: 3 - Alpha",
@@ -36,7 +36,7 @@ offline = [
   "PyAudioWPatch==0.2.12.8; sys_platform == 'win32'",
   "piper-phonemize @ https://github.com/csukuangfj/piper-phonemize/releases/download/v1.5.9/piper_phonemize-1.5.9-cp312-cp312-win_amd64.whl ; sys_platform == 'win32'",
 ]
-dev = ["ruff==0.16.5", "build==1.6.0"]
+dev = ["ruff==0.16.5", "build==1.6.0", "numpy==2.5.4"]
 diagnostics = ["av==16.0.1", "psutil>=7,<8", "Pillow>=11,<13"]
 
 [project.scripts]

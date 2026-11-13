@@ -23,6 +23,7 @@ import soundfile as sf
 from canto_tts.backends.base import safe_prepare_text
 
 from . import model_runtime
+from .capture_process import CaptureProcess
 from .numbers import spoken_numbers
 from .paths import DATA_DIR
 
@@ -495,62 +496,15 @@ class SpeechSegmenter:
         self._drain()
 
 
-class Microphone:
-    """Bounded VAD producer. It never persists captured audio."""
-
-    def __init__(self, segment, error):
-        self.segment, self.error = segment, error
-        self.stop_event = threading.Event()
-        self.thread = None
-
-    def start(self):
-        self.stop_event.clear()
-        self.thread = threading.Thread(target=self._run, daemon=True)
-        self.thread.start()
-
-    def _run(self):
-        buffers = queue.Queue(maxsize=30)
-        try:
-            segmenter = SpeechSegmenter(self.segment)
-
-            def capture(data, frames, timing, status):
-                if status:
-                    self.error("输入设备缓冲异常，已停止收音。请稍候重试。")
-                    self.stop_event.set()
-                    return
-                if self.stop_event.is_set():
-                    return
-                try:
-                    buffers.put_nowait(data[:, 0].copy())
-                except queue.Full:
-                    self.error("收音处理跟不上，已停止。请稍候重试。")
-                    self.stop_event.set()
-
-            with sd.InputStream(
-                samplerate=16000, channels=1, blocksize=512, dtype="float32", callback=capture
-            ):
-                while not self.stop_event.is_set():
-                    try:
-                        data = buffers.get(timeout=0.1)
-                    except queue.Empty:
-                        continue
-                    segmenter.feed(data)
-        except Exception:
-            self.error("无法启用麦克风，请检查 Windows 麦克风权限和默认输入设备。")
-
-    def stop(self):
-        self.stop_event.set()
-        if self.thread and self.thread is not threading.current_thread():
-            self.thread.join(timeout=2)
-
-
 class PlaybackProcessor:
     """Device-rate PCM -> streaming 16 kHz mono -> bounded VAD segments."""
 
-    def __init__(self, rate, channels, segment):
+    def __init__(self, rate, channels, segment, segmenter_factory=None):
         if rate <= 0 or channels < 1:
             raise ValueError("设备音频格式无效。")
         self.rate, self.channels, self.segment = rate, channels, segment
+        self.segmenter_factory = segmenter_factory
+        self.segmenter = None
         self.input_frames = 0
         self.output_frames = 0
         self.tail_padding_frames = 0
@@ -562,7 +516,10 @@ class PlaybackProcessor:
 
         rate = self.rate
         self.resampler = soxr.ResampleStream(rate, 16000, 1, dtype="float32", quality="HQ")
-        self.segmenter = SpeechSegmenter(self.segment)
+        if self.segmenter_factory is None:
+            self.segmenter = SpeechSegmenter(self.segment)
+        elif self.segmenter is None:
+            self.segmenter = self.segmenter_factory(self.segment)
         self.pending = np.empty(0, dtype=np.float32)
         self.paused = False
 
@@ -599,79 +556,6 @@ class PlaybackProcessor:
         self.paused = True
 
 
-class SystemAudio(Microphone):
-    """Capture the default WASAPI playback endpoint after an explicit Start."""
-
-    def __init__(self, segment, error, started):
-        super().__init__(segment, error)
-        self.started = started
-
-    def _run(self):
-        buffers = queue.Queue(maxsize=64)
-        try:
-            import pyaudiowpatch as pa
-
-            with pa.PyAudio() as manager:
-                device = manager.get_default_wasapi_loopback()
-                if not device.get("isLoopbackDevice"):
-                    raise RuntimeError("No WASAPI loopback endpoint")
-                rate, channels = int(device["defaultSampleRate"]), int(device["maxInputChannels"])
-                processor = PlaybackProcessor(rate, channels, self.segment)
-
-                def capture(data, frames, timing, status):
-                    if self.stop_event.is_set():
-                        return None, pa.paComplete
-                    if status:
-                        self.error("设备声音输入缓冲异常，已停止。请稍候重试。")
-                        self.stop_event.set()
-                        return None, pa.paAbort
-                    try:
-                        buffers.put_nowait(data)
-                    except queue.Full:
-                        self.error("设备声音处理跟不上，已停止。请暂停播放后重试。")
-                        self.stop_event.set()
-                        return None, pa.paAbort
-                    return None, pa.paContinue
-
-                if self.stop_event.is_set():
-                    return
-                with manager.open(
-                    format=pa.paFloat32,
-                    channels=channels,
-                    rate=rate,
-                    input=True,
-                    input_device_index=int(device["index"]),
-                    frames_per_buffer=1024,
-                    stream_callback=capture,
-                ) as stream:
-                    self.started(str(device["name"]))
-                    last_packet = time.monotonic()
-                    idle_flushed = False
-                    while not self.stop_event.is_set():
-                        try:
-                            data = buffers.get(timeout=0.05)
-                            samples = np.frombuffer(data, dtype=np.float32).reshape(-1, channels)
-                        except queue.Empty:
-                            if not stream.is_active():
-                                raise RuntimeError("Playback endpoint stopped")
-                            # A late packet is not recorded silence. Inserting
-                            # timed zeros here stretches speech and splits words.
-                            if not idle_flushed and time.monotonic() - last_packet >= 0.8:
-                                processor.flush()
-                                idle_flushed = True
-                            continue
-                        last_packet = time.monotonic()
-                        idle_flushed = False
-                        processor.feed(samples)
-        except Exception:
-            if not self.stop_event.is_set():
-                self.error(
-                    "无法获取设备播放声音。请检查 Windows 默认输出设备；切换耳机后请停止并重试。"
-                )
-        finally:
-            self.stop_event.set()
-
-
 def make_vad():
     config = sherpa_onnx.VadModelConfig()
     config.silero_vad.model = str(ROOT / "models/vad/silero_vad.onnx")
@@ -680,3 +564,13 @@ def make_vad():
     config.silero_vad.max_speech_duration = 4
     config.sample_rate = 16000
     return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=15)
+
+
+class Microphone(CaptureProcess):
+    def __init__(self, segment, error, paragraph=False):
+        super().__init__("microphone", segment, error, paragraph=paragraph)
+
+
+class SystemAudio(CaptureProcess):
+    def __init__(self, segment, error, started, paragraph=False):
+        super().__init__("system", segment, error, started=started, paragraph=paragraph)
