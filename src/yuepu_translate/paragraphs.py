@@ -73,8 +73,8 @@ class Revision:
 class ParagraphRevision:
     """A paragraph replaces its draft; stable old text and final rows freeze.
 
-    Long speech freezes a prefix agreed by two updates after 15 s, keeping at
-    least 20 characters revisable. Audio checkpoints do not create new rows.
+    Freeze an agreed prefix after 2 s, keeping at least 8 characters revisable.
+    Audio checkpoints do not create new rows.
     This is textual agreement, not a claim of manually verified correctness.
     """
 
@@ -104,17 +104,17 @@ class ParagraphRevision:
         cut = old_length
         if final:
             cut = len(candidate)
-        elif age_seconds >= 15 and len(current) > 32:
-            count = min(stable, len(current) - 20)
+        elif age_seconds >= 2 and len(current) > 14:
+            count = min(stable, len(current) - 8)
             if count > 0:
                 proposed = positions[count - 1] + 1
-                # Prefer completed clauses for translation, then a sufficiently
-                # old agreed prefix if a long utterance has no punctuation.
+                # Promote complete clauses, not arbitrary character counts:
+                # cutting a word can make the MT model invent its missing half.
                 boundary = max(candidate.rfind(c, old_length, proposed) for c in "。！？；，.!?;")
-                if boundary >= old_length + 8:
+                if boundary >= old_length + 6:
                     proposed = boundary + 1
-                if len(units(candidate[old_length:proposed])[0]) >= 12:
-                    cut = max(cut, proposed)
+                    if len(units(candidate[old_length:proposed])[0]) >= 6:
+                        cut = max(cut, proposed)
         delta = candidate[old_length:cut]
         self.frozen = candidate[:cut]
         self.source = self.previous = candidate

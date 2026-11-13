@@ -16,6 +16,8 @@ class TranscriptEntry:
     status: str = "识别中"
     timestamp: str = ""
     revision: int = 0
+    source_confirmed: int = 0
+    target_confirmed: int = 0
 
     def __post_init__(self):
         if not self.timestamp:
@@ -32,6 +34,8 @@ class TranscriptModel(QAbstractListModel):
         self.by_key = {}
         self.characters = 0
         self.evicted = 0
+        self._positions = {}
+        self._first_row = 0
 
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self.items)
@@ -40,7 +44,12 @@ class TranscriptModel(QAbstractListModel):
         if not index.isValid() or not 0 <= index.row() < len(self.items):
             return None
         item = self.items[index.row()]
-        if role in (Qt.DisplayRole, Qt.AccessibleTextRole):
+        if role == Qt.AccessibleTextRole:
+            return (
+                f"{item.timestamp}  {item.source}\n{item.target or item.status}\n"
+                f"{item.status}；已固定原文 {item.source_confirmed} 字、译文 {item.target_confirmed} 字"
+            )
+        if role == Qt.DisplayRole:
             return f"{item.timestamp}  {item.source}\n{item.target or item.status}"
         if role == Qt.UserRole:
             return item
@@ -56,6 +65,7 @@ class TranscriptModel(QAbstractListModel):
         self.beginInsertRows(QModelIndex(), row, row)
         self.items.append(entry)
         self.by_key[entry.key] = entry
+        self._positions[entry.key] = self._first_row + row
         self.characters += size
         self.endInsertRows()
         return self._prune()
@@ -64,7 +74,7 @@ class TranscriptModel(QAbstractListModel):
         item = self.by_key.get(key)
         if item is None:
             return False
-        allowed = {"source", "target", "status"}
+        allowed = {"source", "target", "status", "source_confirmed", "target_confirmed"}
         if set(fields) - allowed:
             raise ValueError("无效字幕字段")
         new_source, new_target = (
@@ -73,11 +83,15 @@ class TranscriptModel(QAbstractListModel):
         )
         if len(new_source) + len(new_target) > self.max_chars:
             raise ValueError("单条字幕超出缓存容量")
+        for name, text in (("source_confirmed", new_source), ("target_confirmed", new_target)):
+            value = fields.get(name, getattr(item, name))
+            if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= len(text):
+                raise ValueError("固定前文长度必须在字幕范围内")
         self.characters += len(new_source) + len(new_target) - len(item.source) - len(item.target)
         for name, value in fields.items():
             setattr(item, name, value)
         item.revision += 1
-        row = self.items.index(item)
+        row = self._positions[key] - self._first_row
         self.dataChanged.emit(self.index(row), self.index(row))
         self._prune()
         return True
@@ -88,6 +102,8 @@ class TranscriptModel(QAbstractListModel):
             self.beginRemoveRows(QModelIndex(), 0, 0)
             item = self.items.pop(0)
             self.by_key.pop(item.key)
+            self._positions.pop(item.key)
+            self._first_row += 1
             self.characters -= len(item.source) + len(item.target)
             self.endRemoveRows()
             count += 1
@@ -98,6 +114,8 @@ class TranscriptModel(QAbstractListModel):
         self.beginResetModel()
         self.items.clear()
         self.by_key.clear()
+        self._positions.clear()
+        self._first_row = 0
         self.characters = self.evicted = 0
         self.endResetModel()
 

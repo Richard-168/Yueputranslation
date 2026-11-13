@@ -43,21 +43,52 @@ class RollingAudio:
     for deterministic PCM tests, not for distinguishing singing from music.
     """
 
-    def __init__(self, emit, detector=None, pause_seconds=2.0):
+    def __init__(
+        self,
+        emit,
+        detector=None,
+        pause_seconds=2.0,
+        *,
+        first_seconds=4.0,
+        update_seconds=2.0,
+        pre_roll_seconds=2.0,
+        max_segment_seconds=None,
+        context_seconds=30,
+        overlap_seconds=8,
+    ):
+        if (
+            not 0.25 <= first_seconds <= 4
+            or not 0.25 <= update_seconds <= 4
+            or not 0 <= pre_roll_seconds <= 2
+            or not 0.25 <= pause_seconds <= 5
+            or (max_segment_seconds is not None and not 1 <= max_segment_seconds <= 15)
+            or not 4 <= context_seconds <= 30
+            or not 0 < overlap_seconds < context_seconds
+        ):
+            raise ValueError("无效的实时字幕时间配置。")
         self.emit, self.detector = emit, detector
         self.pause_samples = round(pause_seconds * RATE)
+        self.first_samples = round(first_seconds * RATE)
+        self.update_samples = round(update_seconds * RATE)
+        self.pre_roll_samples = round(pre_roll_seconds * RATE)
+        self.context_samples = round(context_seconds * RATE)
+        self.overlap_samples = round(overlap_seconds * RATE)
+        self.max_segment_samples = (
+            round(max_segment_seconds * RATE) if max_segment_seconds is not None else None
+        )
         self.chunks = deque()
         self.retained = 0
         self.pending = np.empty(0, dtype=np.float32)
         self.end = self.block = 0
         self.origin = None
+        self.paragraph_start = 0
         self.voice_end = 0
         self.next_update = 0
         self.last_final_end = 0
 
     def _window(self, final=False, checkpoint=False):
-        end = min(self.end, self.origin + 30 * RATE) if checkpoint else self.end
-        start = max(self.origin, end - 30 * RATE)
+        end = min(self.end, self.origin + self.context_samples) if checkpoint else self.end
+        start = max(self.origin, end - self.context_samples)
         count = end - start
         tick = monotonic()
         buffer = np.concatenate(self.chunks)
@@ -71,7 +102,7 @@ class RollingAudio:
                 audio,
                 final,
                 tick,
-                tick + max(0, self.origin + 30 * RATE - end) / RATE,
+                tick + max(0, self.origin + self.context_samples - end) / RATE,
                 checkpoint,
                 min(self.voice_end, end),
             )
@@ -81,14 +112,16 @@ class RollingAudio:
             self.block += 1
             self.origin = None
         elif checkpoint:
-            self.origin = end - 8 * RATE
-        self.next_update = end + 2 * RATE
+            self.origin = end - self.overlap_samples
+        self.next_update = end + self.update_samples
 
     def _accept(self, frame):
         self.chunks.append(frame.copy())
         self.retained += len(frame)
         self.end += len(frame)
-        while self.retained - len(self.chunks[0]) >= 30 * RATE:
+        # A checkpoint can end inside the current 512-sample frame. Keep a
+        # frame of headroom so its older left edge remains addressable.
+        while self.retained - len(self.chunks[0]) >= self.context_samples + 512:
             self.retained -= len(self.chunks.popleft())
         voiced = (
             self.detector(frame)
@@ -98,13 +131,19 @@ class RollingAudio:
         if voiced:
             self.voice_end = self.end
             if self.origin is None:
-                self.origin = max(self.last_final_end, self.end - 2 * RATE)
-                self.next_update = self.origin + 4 * RATE
+                self.origin = max(self.last_final_end, self.end - self.pre_roll_samples)
+                self.paragraph_start = self.origin
+                self.next_update = self.origin + self.first_samples
         if self.origin is None:
             return
         if not voiced and self.end - self.voice_end >= self.pause_samples:
             self._window(final=True)
-        elif self.end - self.origin >= 30 * RATE:
+        elif (
+            self.max_segment_samples is not None
+            and self.end - self.paragraph_start >= self.max_segment_samples
+        ):
+            self._window(final=True)
+        elif self.end - self.origin >= self.context_samples:
             self._window(checkpoint=True)
         elif self.end >= self.next_update:
             self._window()
@@ -145,7 +184,7 @@ class SongMailbox:
                 return
             if window.final or window.checkpoint:
                 if len(self.finals) >= self.max_finals:
-                    raise SongOverload("歌曲识别跟不上播放速度，已停止收音。请暂停来源后重试。")
+                    raise SongOverload("字幕处理跟不上播放速度，已停止收音。请暂停来源后重试。")
                 self.finals.append(window)
                 if window.final:
                     self.last_final = window.block

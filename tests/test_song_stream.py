@@ -2,13 +2,44 @@
 
 import threading
 import unittest
+from unittest.mock import patch
 
 import numpy as np
 
+from yuepu_translate.song_pipeline import make_song_stream
 from yuepu_translate.song_stream import RollingAudio, SongMailbox, draft_fits, trim_context
 
 
 class SongStreamTests(unittest.TestCase):
+    def test_checkpoint_after_idle_keeps_frame_alignment_context(self):
+        windows = []
+        with patch(
+            "yuepu_translate.song_pipeline.make_voice_detector",
+            return_value=lambda frame: np.max(np.abs(frame)) > 0.1,
+        ):
+            stream = make_song_stream(windows.append)
+        audio = np.concatenate(
+            (np.zeros(10 * 16000, np.float32), np.linspace(0.2, 0.8, 20 * 16000, dtype=np.float32))
+        )
+        stream.feed(audio)
+        stream.flush()
+        self.assertTrue(any(w.checkpoint for w in windows))
+        for window in windows:
+            self.assertGreater(len(window.samples), 0)
+            np.testing.assert_array_equal(window.samples, audio[window.start : window.end])
+
+    def test_paragraph_capture_does_not_grow_its_decode_window_with_history(self):
+        windows = []
+        with patch(
+            "yuepu_translate.song_pipeline.make_voice_detector", return_value=lambda f: True
+        ):
+            stream = make_song_stream(windows.append)
+        stream.feed(np.ones(120 * 16000, dtype=np.float32))
+        stream.flush()
+        self.assertLessEqual(max(len(w.samples) for w in windows), 8.032 * 16000)
+        finals = [w for w in windows if w.final]
+        self.assertGreaterEqual(len(finals), 8, "Archive bounded passages during continuous speech")
+
     def test_continuous_speech_updates_one_paragraph_until_a_real_end(self):
         windows = []
         stream = RollingAudio(windows.append)

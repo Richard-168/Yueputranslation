@@ -23,6 +23,8 @@ from PySide6.QtGui import (
     QFont,
     QKeySequence,
     QShortcut,
+    QTextCharFormat,
+    QTextCursor,
     QTextDocument,
     QTextOption,
 )
@@ -52,6 +54,8 @@ from PySide6.QtWidgets import (
 from .cloud_config import CloudConfig, load_settings
 from .cloud_dialog import CloudDialog
 from .desktop_engine import AudioPlayer, Cancelled, Engine, Microphone, Request, SystemAudio
+from .inference_control import InferenceCancelled
+from .live_session import LiveSession, make_live_stream
 from .paths import DATA_DIR
 from .song_pipeline import SongFile, SongSession
 from .transcript_model import TranscriptEntry, TranscriptModel
@@ -123,19 +127,24 @@ class PairDelegate(QStyledItemDelegate):
         active = entry.status in {"识别中", "翻译中"}
         source = entry.source or ("正在识别…" if active else "未完成有效语句识别")
         target = entry.target or (entry.status + "…" if active else entry.status)
-        for text in (source, target):
+        for text, confirmed in ((source, entry.source_confirmed), (target, entry.target_confirmed)):
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setDefaultFont(QFont("Microsoft YaHei UI", self.font_size))
             option = QTextOption()
             option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
             doc.setDefaultTextOption(option)
-            doc.setPlainText(text)
+            cursor = QTextCursor(doc)
+            fixed, draft = QTextCharFormat(), QTextCharFormat()
+            fixed.setForeground(QColor("#edf3fd"))
+            draft.setForeground(QColor("#9daec5"))
+            cursor.insertText(text[:confirmed], fixed)
+            cursor.insertText(text[confirmed:], draft)
             doc.setTextWidth(max(80, (width // 2) - 58))
             docs.append(doc)
         height = max(104, int(max(d.size().height() for d in docs)) + 66)
         self.cache[key] = (docs, height)
-        self.heights[key] = height
+        self.heights[(entry.key, width, self.font_size)] = (entry.revision, height)
         while len(self.cache) > 600:
             self.cache.popitem(last=False)
         while len(self.heights) > 20000:
@@ -147,8 +156,9 @@ class PairDelegate(QStyledItemDelegate):
         if entry is None:
             return QSize(100, 104)
         width = max(300, self.view.viewport().width())
-        key = (entry.key, entry.revision, width, self.font_size)
-        height = self.heights.get(key)
+        key = (entry.key, width, self.font_size)
+        cached = self.heights.get(key)
+        height = cached[1] if cached is not None and cached[0] == entry.revision else None
         return QSize(width, height if height is not None else self.documents(entry, width)[1])
 
     def paint(self, painter, option, index):
@@ -309,6 +319,7 @@ class Window(QMainWindow):
         self.microphone = None
         self.song_session = None
         self.song_keys = {}
+        self.live_versions = {}
         self.song_final_block = -1
         self.song_file_vocals = False
         self.cloud_enabled = False
@@ -427,8 +438,11 @@ class Window(QMainWindow):
         self.count_label = QLabel("0 条字幕")
         languages.addWidget(QLabel("识别模式"))
         self.profile_box = QComboBox()
-        self.profile_box.addItems(["会话", "段落修订（实验）"])
+        self.profile_box.addItems(["会话（实时字幕）", "段落修订（实验）"])
         self.profile_box.setAccessibleName("识别模式")
+        self.profile_box.setToolTip(
+            "会话：边说边显示原文，翻译随后更新。\n段落修订：使用较大的模型复核整段，等待较长。"
+        )
         self.profile_box.currentIndexChanged.connect(self.source_changed)
         languages.addWidget(self.profile_box)
         languages.addStretch()
@@ -540,7 +554,7 @@ class Window(QMainWindow):
     def source_changed(self):
         if hasattr(self, "profile_box") and self.profile_box.currentIndex() == 1:
             self.mode_hint.setText(
-                "连续更新同段字幕；句末复核识别和译文，较早稳定的前文逐步固定。"
+                "亮色前文已固定，浅色末尾可修订；只翻译新增内容，长讲话分段保留。"
                 + (
                     "设备收音期间仅字幕。"
                     if self.source_box.currentIndex() == 1
@@ -549,10 +563,12 @@ class Window(QMainWindow):
             )
         elif self.source_box.currentIndex() == 1:
             self.mode_hint.setText(
-                "设备声音：获取默认扬声器／耳机的混合声音。收音期间仅字幕，停止后可播报。"
+                "设备声音：原文随听随更新；亮色已固定，浅色暂定。收音期间仅字幕。"
             )
         else:
-            self.mode_hint.setText("麦克风用于面对面交流。字幕按句保留，停止后仍可回看。")
+            self.mode_hint.setText(
+                "边说边显示原文；亮色前文已固定，浅色末尾可修订。停顿后确认并播报。"
+            )
         if self.cloud_enabled:
             self.mode_hint.setText(
                 self.mode_hint.text()
@@ -771,41 +787,29 @@ class Window(QMainWindow):
         self.listening = True
         epoch = self.epoch
         source, auto, mode = self.source_language(), self.auto_box.isChecked(), self.number_mode
-
+        self.player.stop()
+        self.song_keys.clear()
+        self.live_versions.clear()
+        self.song_final_block = -1
         if self.profile_box.currentIndex() == 1:
-            self.player.stop()
-            self.song_keys.clear()
-            self.song_final_block = -1
             self.song_session = SongSession(
                 source,
                 autoplay=auto and self.source_box.currentIndex() == 0,
                 number_mode=mode,
                 cloud=self.cloud_config if self.cloud_enabled else None,
             )
-            self.pending += 1
-            self.jobs.put_nowait((epoch, 0, self.song_session))
-            self.status("正在准备歌曲识别…")
-            self._buttons()
-            return
-
-        def segment(samples):
-            self.events.put((epoch, 0, "segment", (samples, source, auto, mode)))
-
-        def error(message):
-            self.events.put((epoch, 0, "capture_error", message))
-
-        if self.source_box.currentIndex() == 1:
-            self.player.stop()
-            self.microphone = SystemAudio(
-                segment, error, lambda name: self.events.put((epoch, 0, "capture_started", name))
-            )
         else:
-            self.microphone = Microphone(segment, error)
-        self.microphone.start()
+            self.song_session = LiveSession(
+                source,
+                autoplay=auto and self.source_box.currentIndex() == 0,
+                number_mode=mode,
+            )
+        self.pending += 1
+        self.jobs.put_nowait((epoch, 0, self.song_session))
         self.status(
-            "正在启动设备声音翻译（仅字幕）…"
-            if self.source_box.currentIndex() == 1
-            else "正在连续收音，请在句末稍停。"
+            "正在启动实时字幕…"
+            if isinstance(self.song_session, LiveSession)
+            else "正在准备段落修订…"
         )
         self._buttons()
 
@@ -814,6 +818,7 @@ class Window(QMainWindow):
             return
         epoch = self.epoch
         session = self.song_session
+        factory = make_live_stream if isinstance(session, LiveSession) else None
 
         def error(message):
             self.events.put((epoch, 0, "capture_error", message))
@@ -824,11 +829,21 @@ class Window(QMainWindow):
                 error,
                 lambda name: self.events.put((epoch, 0, "capture_started", name)),
                 paragraph=True,
+                segmenter_factory=factory,
             )
         else:
-            self.microphone = Microphone(session.mailbox.put, error, paragraph=True)
+            self.microphone = Microphone(
+                session.mailbox.put,
+                error,
+                paragraph=True,
+                segmenter_factory=factory,
+            )
         self.microphone.start()
-        self.status("段落修订已开始，正在等待第一段人声…")
+        self.status(
+            "实时字幕已开始，原文随说话更新，译文随后显示…"
+            if isinstance(session, LiveSession)
+            else "段落修订已开始，正在等待第一段人声…"
+        )
 
     def _song_key(self, block):
         if block not in self.song_keys:
@@ -889,7 +904,7 @@ class Window(QMainWindow):
                 if payload == "load":
                     self.engine.load(self.cancel, lambda message: emit("status", message))
                     emit("ready", True)
-                elif isinstance(payload, SongSession):
+                elif isinstance(payload, (SongSession, LiveSession)):
                     payload.run(self.engine, self.player, self.cancel, emit)
                 elif self.cloud_enabled and payload.kind == "text":
                     from .enhanced_inference import process_text
@@ -901,7 +916,7 @@ class Window(QMainWindow):
                 else:
                     self.engine.process(payload, self.cancel, self.player, emit)
                     emit("done", True)
-            except Cancelled:
+            except (Cancelled, InferenceCancelled):
                 pass
             except (ValueError, RuntimeError, TimeoutError) as exc:
                 emit("error", str(exc))
@@ -951,11 +966,18 @@ class Window(QMainWindow):
                 self.network_pill.setToolTip(note)
             elif kind == "source":
                 self._change_transcript(
-                    lambda: self.model.update_entry(key, source=value, status="翻译中")
+                    lambda: self.model.update_entry(
+                        key, source=value, source_confirmed=len(value), status="翻译中"
+                    )
                 )
             elif kind == "translation":
                 self._change_transcript(
-                    lambda: self.model.update_entry(key, target=value["text"], status="已翻译")
+                    lambda: self.model.update_entry(
+                        key,
+                        target=value["text"],
+                        target_confirmed=len(value["text"]),
+                        status="已翻译",
+                    )
                 )
                 self.status(
                     f"识别 {value['recognition_seconds']:.2f} 秒 · 翻译 {value['translation_seconds']:.2f} 秒"
@@ -971,15 +993,84 @@ class Window(QMainWindow):
                 self.status(f"正在获取设备声音：{value}（仅字幕）")
             elif kind == "song_ready":
                 self._start_song_capture()
+            elif kind == "live_source":
+                row_key = self._song_key(value["block"])
+                self.live_versions[value["block"]] = value["version"]
+                self._change_transcript(
+                    lambda: self.model.update_entry(
+                        row_key,
+                        source=value["text"],
+                        source_confirmed=value.get("frozen_characters", 0),
+                        status="原文已固定 · 译文更新中"
+                        if value["final"]
+                        else "亮色已固定 · 浅色暂定",
+                    )
+                )
+                self.status("原文已确认，正在翻译…" if value["final"] else "原文实时更新中…")
+                self.status_label.setToolTip(
+                    f"本次识别 {value['recognition_seconds']:.2f} 秒；"
+                    f"音频快照末尾至原文返回 {value['lag_seconds']:.2f} 秒，不含攒帧和本次绘制。"
+                )
+            elif kind == "live_translation":
+                block = value["block"]
+                current_version = self.live_versions.get(block)
+                if current_version is None:
+                    continue
+                row_key = self.song_keys.get(block)
+                item = self.model.by_key.get(row_key)
+                if item is None:
+                    continue
+                frozen_target = value.get("frozen_target", value["text"] if value["final"] else "")
+                if current_version != value["version"]:
+                    # An old draft may have completed a still-valid fixed prefix.
+                    # Adopt that prefix only; its speculative tail stays obsolete.
+                    frozen_source = value.get("frozen_source", "")
+                    if (
+                        not frozen_source
+                        or not item.source.startswith(frozen_source)
+                        or len(frozen_target) <= item.target_confirmed
+                        or not frozen_target.startswith(item.target[: item.target_confirmed])
+                    ):
+                        continue
+                    self._change_transcript(
+                        lambda: self.model.update_entry(
+                            row_key,
+                            target=frozen_target,
+                            target_confirmed=len(frozen_target),
+                            status="前文已固定 · 末尾更新中",
+                        )
+                    )
+                    continue
+                self._change_transcript(
+                    lambda: self.model.update_entry(
+                        row_key,
+                        target=value["text"],
+                        target_confirmed=len(frozen_target),
+                        status="已确认" if value["final"] else "亮色已固定 · 浅色暂定",
+                    )
+                )
+                if value["final"]:
+                    self.active_ids.discard(row_key)
+                    self.song_keys.pop(block, None)
+                    self.live_versions.pop(block, None)
+            elif kind == "live_empty":
+                block = value["block"]
+                row_key = self.song_keys.pop(block, None)
+                self.live_versions.pop(block, None)
+                if row_key is not None:
+                    self._change_transcript(
+                        lambda: self.model.update_entry(row_key, status="暂定 · 未确认")
+                    )
+                    self.active_ids.discard(row_key)
             elif kind == "song_source":
                 if value["block"] <= self.song_final_block:
                     continue
                 row_key = self._song_key(value["block"])
                 fields = dict(
-                    source=value["text"], status="句末复核" if value["final"] else "暂定 · 翻译中"
+                    source=value["text"],
+                    source_confirmed=value.get("frozen_characters", 0),
+                    status="片段固定 · 翻译中" if value["final"] else "亮色已固定 · 浅色暂定",
                 )
-                if self.model.by_key[row_key].source != value["text"]:
-                    fields["target"] = value.get("frozen_target", "")
                 self._change_transcript(lambda: self.model.update_entry(row_key, **fields))
             elif kind == "song_translation":
                 if value["block"] <= self.song_final_block:
@@ -989,10 +1080,11 @@ class Window(QMainWindow):
                     lambda: self.model.update_entry(
                         row_key,
                         target=value["text"],
+                        target_confirmed=len(value.get("frozen_target", "")),
                         status=(
                             "已确认"
                             if value["final"]
-                            else "前文已固定 · 末尾暂定"
+                            else "亮色已固定 · 浅色暂定"
                             if value.get("frozen_characters", 0)
                             else "暂定 · 待复核"
                         ),
@@ -1019,6 +1111,8 @@ class Window(QMainWindow):
                         row_key,
                         source=value.get("source", ""),
                         target=value.get("target", ""),
+                        source_confirmed=len(value.get("source", "")),
+                        target_confirmed=len(value.get("target", "")),
                         status="前文已固定 · 末尾未确认"
                         if value.get("partial")
                         else "未检测到新内容",
@@ -1028,7 +1122,7 @@ class Window(QMainWindow):
             elif kind == "song_drained":
                 self.song_session = None
                 self.status(
-                    "已保留固定前文，部分末尾没有有效字幕，尚未确认。"
+                    "已有字幕已保留，部分末尾没有有效识别结果，尚未确认。"
                     if isinstance(value, dict) and value.get("partial_count")
                     else "本次没有生成有效字幕，已有记录已保留。"
                     if isinstance(value, dict) and not value.get("confirmed_count")
@@ -1042,18 +1136,6 @@ class Window(QMainWindow):
                     self.stop()
                 self.model.update_entry(key, status="处理失败")
                 self.status(value, True)
-            elif kind == "segment" and self.listening:
-                samples, source, auto, mode = value
-                self.submit(
-                    Request(
-                        self.epoch,
-                        "audio",
-                        source=source,
-                        samples=samples,
-                        autoplay=auto,
-                        number_mode=mode,
-                    )
-                )
         self._buttons()
         if self.closing and not self.worker.is_alive():
             self.timer.stop()

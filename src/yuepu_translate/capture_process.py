@@ -44,9 +44,18 @@ def read_packet(stream):
 class CaptureProcess:
     """The owned helper can be terminated even when a native driver blocks."""
 
-    def __init__(self, source, segment, error, started=None, paragraph=False):
+    def __init__(
+        self,
+        source,
+        segment,
+        error,
+        started=None,
+        paragraph=False,
+        segmenter_factory=None,
+    ):
         self.source, self.segment, self.error = source, segment, error
         self.started, self.paragraph = started, paragraph
+        self.segmenter_factory = segmenter_factory
         self.stop_event = threading.Event()
         self.thread = self.child = None
         self.keepalive = None
@@ -187,7 +196,8 @@ class CaptureProcess:
                         rate,
                         channels,
                         self.segment,
-                        segmenter_factory=make_song_stream if self.paragraph else None,
+                        segmenter_factory=self.segmenter_factory
+                        or (make_song_stream if self.paragraph else None),
                     )
                     ready = True
                     if self.started:

@@ -164,6 +164,7 @@ class Engine:
             "models/vits-piper-zh_CN-huayan-medium/zh_CN-huayan-medium.onnx",
             "models/vad/silero_vad.onnx",
             "runtime/llama-b12314/llama-completion.exe",
+            "runtime/llama-b12314/llama-server.exe",
         ]
         if any(not (ROOT / p).is_file() for p in required):
             raise RuntimeError("离线模型文件不完整，请先完成模型准备。")
@@ -563,10 +564,19 @@ def make_vad():
 
 
 class Microphone(CaptureProcess):
-    def __init__(self, segment, error, paragraph=False):
-        super().__init__("microphone", segment, error, paragraph=paragraph)
+    def __init__(self, segment, error, paragraph=False, segmenter_factory=None):
+        super().__init__(
+            "microphone", segment, error, paragraph=paragraph, segmenter_factory=segmenter_factory
+        )
 
 
 class SystemAudio(CaptureProcess):
-    def __init__(self, segment, error, started, paragraph=False):
-        super().__init__("system", segment, error, started=started, paragraph=paragraph)
+    def __init__(self, segment, error, started, paragraph=False, segmenter_factory=None):
+        super().__init__(
+            "system",
+            segment,
+            error,
+            started=started,
+            paragraph=paragraph,
+            segmenter_factory=segmenter_factory,
+        )

@@ -2,10 +2,45 @@
 
 import unittest
 
+from PySide6.QtCore import Qt
+
 from yuepu_translate.transcript_model import TranscriptEntry, TranscriptModel
 
 
 class TranscriptTests(unittest.TestCase):
+    def test_confirmed_spans_are_validated_atomically_and_are_accessible(self):
+        model = TranscriptModel()
+        model.append(
+            TranscriptEntry(1, "yue", "zh", source="固定前文暂定末尾", target="固定译文草稿")
+        )
+        model.update_entry(1, source_confirmed=4, target_confirmed=4)
+        self.assertIn(
+            "已固定原文 4 字、译文 4 字", model.data(model.index(0), Qt.AccessibleTextRole)
+        )
+        before = model.characters
+        for fields in (
+            dict(source_confirmed=100),
+            dict(target_confirmed=-1),
+            dict(target="小", target_confirmed=4),
+        ):
+            with self.assertRaises(ValueError):
+                model.update_entry(1, **fields)
+        self.assertEqual(model.characters, before)
+        self.assertEqual(model.items[0].target, "固定译文草稿")
+
+    def test_row_notifications_stay_correct_after_pruning_and_clear(self):
+        model, changed = TranscriptModel(max_rows=2), []
+        model.dataChanged.connect(lambda first, last: changed.append(first.row()))
+        for key in range(4):
+            model.append(TranscriptEntry(key, "yue", "zh", source="原文"))
+        model.update_entry(2, target="倒数第二条")
+        model.update_entry(3, target="最后一条")
+        self.assertEqual(changed, [0, 1])
+        model.clear()
+        model.append(TranscriptEntry(10, "zh", "yue"))
+        model.update_entry(10, source="新的内容")
+        self.assertEqual(changed[-1], 0)
+
     def test_late_result_does_not_overwrite_another_row(self):
         model = TranscriptModel(max_rows=2)
         for key in range(3):

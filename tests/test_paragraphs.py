@@ -6,6 +6,23 @@ from yuepu_translate.paragraphs import ParagraphRevision, accept_punctuation, ov
 
 
 class ParagraphTests(unittest.TestCase):
+    def test_stability_does_not_commit_in_the_middle_of_a_clause(self):
+        paragraph = ParagraphRevision()
+        text = "这几个字都无法表达我想说的话的意思"
+        paragraph.update(text, 0, 1, 2)
+        paragraph.update(text + "后面还有需要继续解释的内容", 0, 2, 4)
+        self.assertEqual(paragraph.frozen, "", "Do not split a word just to advance a prefix")
+
+    def test_stable_prefix_is_frozen_while_the_short_recent_tail_can_change(self):
+        paragraph = ParagraphRevision()
+        prefix = "前面的解释已经清楚，请把这部分固定下来，"
+        paragraph.update(prefix + "后面还在继续说话", 0, 1, 0.8)
+        revision = paragraph.update(prefix + "后面的内容仍会更新", 0, 2, 2.2)
+        self.assertTrue(paragraph.frozen, "Stable clauses should not wait 15 seconds to freeze")
+        self.assertTrue(prefix.startswith(paragraph.frozen))
+        self.assertEqual(revision.source, paragraph.frozen + revision.tail)
+        self.assertTrue(revision.tail.endswith("仍会更新"))
+
     def test_punctuation_review_cannot_change_numbers_or_words(self):
         self.assertEqual(
             accept_punctuation("号码2038不是2308", "号码2038，不是2308。"), "号码2038，不是2308。"

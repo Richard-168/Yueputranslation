@@ -7,8 +7,9 @@ import numpy as np
 
 from .enhanced_inference import SessionInference
 from .inference_control import InferenceCancelled, check_cancel
-from .paragraphs import ParagraphRevision
+from .paragraphs import ParagraphRevision, accept_punctuation
 from .song_stream import SongMailbox, SongWindow, draft_fits, trim_context
+from .translation_state import IncrementalTranslation
 
 
 def make_voice_detector():
@@ -32,7 +33,13 @@ def make_song_stream(emit):
     """Native voice activity gates inference; it never cuts audio into UI rows."""
     from .song_stream import RollingAudio
 
-    return RollingAudio(emit, detector=make_voice_detector())
+    return RollingAudio(
+        emit,
+        detector=make_voice_detector(),
+        context_seconds=8,
+        overlap_seconds=2,
+        max_segment_seconds=15,
+    )
 
 
 class SongSession:
@@ -66,7 +73,11 @@ class SongSession:
             state = states.pop(block, None)
             value = dict(block=block)
             if state is not None and state["revision"].frozen:
-                value.update(source=state["revision"].frozen, target=state["target"], partial=True)
+                value.update(
+                    source=state["revision"].frozen,
+                    target=state["translation"].target,
+                    partial=True,
+                )
                 partial_count += 1
             emit("song_empty", value)
 
@@ -115,16 +126,13 @@ class SongSession:
                         close_empty(window.block)
                     continue
                 if window.final and not self.file_mode:
-                    text = inference.punctuate(text, cancel)
+                    text = accept_punctuation(text, text)
                 state = states.setdefault(
                     window.block,
                     dict(
                         revision=ParagraphRevision(),
                         start=window.start,
-                        target="",
-                        cached_source="",
-                        cached_target="",
-                        speech=[],
+                        translation=IncrementalTranslation(),
                     ),
                 )
                 if self.file_mode:
@@ -151,27 +159,18 @@ class SongSession:
                         text=revision.source,
                         final=window.final,
                         frozen_characters=len(state["revision"].frozen),
-                        frozen_target=state["target"],
+                        frozen_target=state["translation"].target,
                     ),
                 )
                 recognized = time.perf_counter()
                 if not reused_asr:
                     seconds_per_audio = (recognized - begin) / (len(window.samples) / 16000)
 
-                def translate_unconfirmed(source):
-                    if not source.strip():
-                        return ""
-                    if source == state["cached_source"]:
-                        return state["cached_target"]
-                    target = inference.translate(source, cancel)
-                    state["cached_source"], state["cached_target"] = source, target
-                    return target
-
-                if revision.frozen_delta.strip():
-                    confirmed = translate_unconfirmed(revision.frozen_delta)
-                    state["target"] += confirmed
-                    state["speech"].append(confirmed)
-                translated = state["target"] + translate_unconfirmed(revision.tail)
+                translated = state["translation"].update(
+                    state["revision"].frozen,
+                    revision.tail,
+                    lambda source: inference.translate(source, cancel),
+                )
                 translation_cost = time.perf_counter() - recognized
                 check_cancel(cancel)
                 emit(
@@ -187,6 +186,7 @@ class SongSession:
                         coalesced=self.mailbox.coalesced,
                         reused_asr=reused_asr,
                         frozen_characters=len(state["revision"].frozen),
+                        frozen_target=state["translation"].target,
                     ),
                 )
                 if window.final:
@@ -196,7 +196,7 @@ class SongSession:
                     # Only confirmed passages may reach TTS. System capture passes False.
                     if self.autoplay:
                         target = "zh" if self.source == "yue" else "yue"
-                        for confirmed in state["speech"]:
+                        for confirmed in state["translation"].speech:
                             engine.speak(
                                 confirmed, target, self.number_mode, player, cancel, lambda: None
                             )
