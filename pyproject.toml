@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "yuepu-translate"
 version = "0.1.0.dev0"
-description = "Experimental offline Cantonese and Mandarin desktop interpreter"
+description = "Experimental Cantonese and Mandarin desktop interpreter with optional cloud enhancement"
 readme = "README.md"
 requires-python = ">=3.12,<3.13"
 license = "MIT"

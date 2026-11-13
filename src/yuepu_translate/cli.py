@@ -4,7 +4,9 @@ import argparse
 
 
 def main():
-    parser = argparse.ArgumentParser(description="粤普双向离线翻译（Windows 实验版）")
+    parser = argparse.ArgumentParser(
+        description="粤普双向翻译（Windows 实验版，默认离线，可选联网增强）"
+    )
     parser.add_argument("--muted", action="store_true", help="生成译音但不播放，用于本地验证")
     args = parser.parse_args()
     from .desktop_qt import main as run_window

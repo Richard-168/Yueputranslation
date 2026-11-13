@@ -1,12 +1,12 @@
 """Resident 1.7B song session. The UI owns capture and transcript retention."""
 
-import os
 import time
 from pathlib import Path
 
 import numpy as np
 
-from .local_inference import InferenceCancelled, LocalInference, check_cancel
+from .enhanced_inference import SessionInference
+from .inference_control import InferenceCancelled, check_cancel
 from .paragraphs import ParagraphRevision
 from .song_stream import SongMailbox, SongWindow, draft_fits, trim_context
 
@@ -36,12 +36,13 @@ def make_song_stream(emit):
 
 
 class SongSession:
-    def __init__(self, source, autoplay=False, number_mode="original"):
+    def __init__(self, source, autoplay=False, number_mode="original", cloud=None):
         if source not in {"yue", "zh"}:
             raise ValueError("请选择粤语或普通话方向。")
         self.source, self.autoplay, self.number_mode = source, autoplay, number_mode
         self.mailbox = SongMailbox()
         self.file_mode = False
+        self.cloud_config = cloud
 
     def windows(self, cancel, emit):
         emit("song_ready", True)
@@ -51,8 +52,7 @@ class SongSession:
     def run(self, engine, player, cancel, emit):
         from .desktop_engine import UNSUPPORTED_SCRIPT, Cancelled
 
-        asr = LocalInference("asr", self.source, threads=min(12, os.cpu_count() or 4))
-        mt = LocalInference("translation", self.source, threads=min(12, os.cpu_count() or 4))
+        inference = SessionInference(self.source, self.cloud_config, emit)
         previous = ""
         previous_end = -1
         states = {}
@@ -71,10 +71,8 @@ class SongSession:
             emit("song_empty", value)
 
         try:
-            emit("status", "正在加载 1.7B 连续识别与常驻翻译模型…")
-            asr.start(cancel)
-            mt.start(cancel)
-            mt.translate("你好。", cancel)
+            emit("status", "正在准备本地段落模型" + ("与联网增强…" if self.cloud_config else "…"))
+            inference.start(cancel)
             for window in self.windows(cancel, emit):
                 check_cancel(cancel)
                 if not draft_fits(window, seconds_per_audio, translation_cost, time.monotonic()):
@@ -98,7 +96,9 @@ class SongSession:
                 if reused_asr:
                     _, origin, _, text = cached_asr
                 else:
-                    text = engine.converters["zh"].convert(asr.transcribe(window.samples, cancel))
+                    text = engine.converters["zh"].convert(
+                        inference.transcribe(window.samples, cancel)
+                    )
                     cached_asr = (window.block, window.start, window.end, text)
                 if UNSUPPORTED_SCRIPT.search(text):
                     raise ValueError("歌曲未识别为普通话、粤语或英文，请检查所选方向。")
@@ -115,7 +115,7 @@ class SongSession:
                         close_empty(window.block)
                     continue
                 if window.final and not self.file_mode:
-                    text = mt.punctuate(text, cancel)
+                    text = inference.punctuate(text, cancel)
                 state = states.setdefault(
                     window.block,
                     dict(
@@ -163,7 +163,7 @@ class SongSession:
                         return ""
                     if source == state["cached_source"]:
                         return state["cached_target"]
-                    target = mt.translate(source, cancel)
+                    target = inference.translate(source, cancel)
                     state["cached_source"], state["cached_target"] = source, target
                     return target
 
@@ -207,17 +207,14 @@ class SongSession:
             raise Cancelled() from None
         finally:
             self.mailbox.finish()
-            asr.stop()
-            mt.stop()
-            asr.close()
-            mt.close()
+            inference.close()
 
 
 class SongFile(SongSession):
     """Longer offline blocks for files; separation is opt-in, never a live default."""
 
-    def __init__(self, path, source, vocals=False):
-        super().__init__(source)
+    def __init__(self, path, source, vocals=False, cloud=None):
+        super().__init__(source, cloud=cloud)
         self.file_mode = True
         self.path = Path(path)
         self.vocals = vocals

@@ -16,6 +16,8 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
+from .inference_control import InferenceCancelled as InferenceCancelled
+from .inference_control import check_cancel
 from .paths import DATA_DIR
 
 ASR_DIR = "models/song-asr-large"
@@ -23,15 +25,6 @@ ASR_MODEL = f"{ASR_DIR}/Qwen3-ASR-1.7B-Q8_0.gguf"
 ASR_PROJECTOR = f"{ASR_DIR}/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"
 MT_MODEL = "models/hymt2/Hy-MT2-1.8B-Q4_K_M.gguf"
 SERVER = "runtime/llama-b12314/llama-server.exe"
-
-
-class InferenceCancelled(Exception):
-    pass
-
-
-def check_cancel(cancel):
-    if cancel.is_set():
-        raise InferenceCancelled()
 
 
 class LocalInference:

@@ -20,3 +20,5 @@ Python 直接依赖在 `pyproject.toml` 中声明，包括 Qt / PySide6、sherpa
 `vocals.py` 的频谱布局与重建方式参考 [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 的 MDX 实现（MIT，Copyright © 2023 karaokenerds），使用独立 NumPy 适配器；该代码许可不覆盖 Kim_Vocal_2 模型权重。上游告知文件位于 `licenses/python-audio-separator.txt`。
 
 诊断脚本还可使用 Qwen3、Qwen3-ASR 0.6B、旧版 HY-MT 等候选。候选许可也不由默认模型或本项目的许可替代。用户录音、音乐和歌词不属于本项目源码授权范围，不作为测试资产发布。
+
+可选联网增强调用阿里云百炼的 [Qwen3-ASR-Flash](https://help.aliyun.com/zh/model-studio/qwen-asr-api-reference) 和 [Qwen-MT-Flash](https://help.aliyun.com/zh/model-studio/qwen-mt-api)，不分发云端模型权重，不使用项目方共享密钥。用户自行提供相应地域的账号密钥并承担费用；可用性、内容处理与计费遵循服务商协议，不受本仓库 MIT 许可替代。

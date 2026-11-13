@@ -49,6 +49,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .cloud_config import CloudConfig, load_settings
+from .cloud_dialog import CloudDialog
 from .desktop_engine import AudioPlayer, Cancelled, Engine, Microphone, Request, SystemAudio
 from .paths import DATA_DIR
 from .song_pipeline import SongFile, SongSession
@@ -309,6 +311,15 @@ class Window(QMainWindow):
         self.song_keys = {}
         self.song_final_block = -1
         self.song_file_vocals = False
+        self.cloud_enabled = False
+        self.network_mode = "offline"
+        self.cloud_config = CloudConfig()
+        self.cloud_remember = False
+        cloud_warning = ""
+        try:
+            self.cloud_config, self.cloud_remember = load_settings()
+        except (RuntimeError, OSError) as exc:
+            cloud_warning = str(exc)
         self.epoch = self.pending = 0
         self.sequence = 0
         self.ready = self.listening = self.closing = False
@@ -327,6 +338,8 @@ class Window(QMainWindow):
         copy_shortcut = QShortcut(QKeySequence.Copy, self.view, activated=self.copy_records)
         copy_shortcut.setContext(Qt.WidgetWithChildrenShortcut)
         self._buttons()
+        if cloud_warning:
+            self.status(cloud_warning, True)
 
     def button(self, text, callback, kind="", parent=None):
         button = QPushButton(text, parent)
@@ -357,12 +370,14 @@ class Window(QMainWindow):
             top.addWidget(tab)
         self.live_tab.setChecked(True)
         top.addStretch()
-        pill = QLabel("本地离线")
-        pill.setObjectName("pill")
-        top.addWidget(pill)
+        self.network_pill = QLabel("本地离线")
+        self.network_pill.setObjectName("pill")
+        top.addWidget(self.network_pill)
         top.addSpacing(10)
         self.export_button = self.button("导出记录", self.export_records, "quiet")
         top.addWidget(self.export_button)
+        self.cloud_button = self.button("联网设置", self.cloud_settings, "quiet")
+        top.addWidget(self.cloud_button)
         top.addWidget(self.button("设置", self.settings, "quiet"))
         root.addWidget(header)
         content = QWidget()
@@ -538,6 +553,15 @@ class Window(QMainWindow):
             )
         else:
             self.mode_hint.setText("麦克风用于面对面交流。字幕按句保留，停止后仍可回看。")
+        if self.cloud_enabled:
+            self.mode_hint.setText(
+                self.mode_hint.text()
+                + (
+                    " 本次任务已回退本地，不再上传；再次开始任务才尝试联网。"
+                    if self.network_mode == "fallback"
+                    else " 已开启联网增强，会上传近期音频和待翻译文字；失败后本次任务转为本地处理。"
+                )
+            )
         self._buttons()
 
     def show_composer(self, show):
@@ -570,6 +594,8 @@ class Window(QMainWindow):
         self.stop_button.setEnabled(bool(self.pending or self.listening or self.player.busy))
         for box in (self.direction_box, self.source_box, self.swap_button, self.profile_box):
             box.setEnabled(idle and not self.listening)
+        self.profile_box.setEnabled(idle and not self.listening and not self.cloud_enabled)
+        self.cloud_button.setEnabled(idle and not self.listening)
         for button in (self.translate_button, self.file_button):
             button.setEnabled(self.ready and idle and not self.listening)
         self.file_button.setText("打开歌曲" if self.profile_box.currentIndex() == 1 else "打开音频")
@@ -673,7 +699,12 @@ class Window(QMainWindow):
             self.cancel.clear()
             if song:
                 try:
-                    task = SongFile(path, self.source_language(), vocals=self.song_file_vocals)
+                    task = SongFile(
+                        path,
+                        self.source_language(),
+                        vocals=self.song_file_vocals,
+                        cloud=self.cloud_config if self.cloud_enabled else None,
+                    )
                 except (OSError, ValueError, RuntimeError) as exc:
                     self.status(str(exc), True)
                     return
@@ -746,7 +777,10 @@ class Window(QMainWindow):
             self.song_keys.clear()
             self.song_final_block = -1
             self.song_session = SongSession(
-                source, autoplay=auto and self.source_box.currentIndex() == 0, number_mode=mode
+                source,
+                autoplay=auto and self.source_box.currentIndex() == 0,
+                number_mode=mode,
+                cloud=self.cloud_config if self.cloud_enabled else None,
             )
             self.pending += 1
             self.jobs.put_nowait((epoch, 0, self.song_session))
@@ -857,6 +891,13 @@ class Window(QMainWindow):
                     emit("ready", True)
                 elif isinstance(payload, SongSession):
                     payload.run(self.engine, self.player, self.cancel, emit)
+                elif self.cloud_enabled and payload.kind == "text":
+                    from .enhanced_inference import process_text
+
+                    process_text(
+                        payload, self.cloud_config, self.engine, self.player, self.cancel, emit
+                    )
+                    emit("done", True)
                 else:
                     self.engine.process(payload, self.cancel, self.player, emit)
                     emit("done", True)
@@ -884,7 +925,30 @@ class Window(QMainWindow):
                 continue
             if kind == "ready":
                 self.ready = True
-                self.status("离线模型已就绪，选择音源后即可开始。")
+                self.status(
+                    "本地模型已就绪，选择音源后即可开始。"
+                    + ("联网增强将在开始处理时请求云端。" if self.cloud_enabled else "")
+                )
+            elif kind == "network_state":
+                mode = value["mode"]
+                self.network_mode = mode
+                self.source_changed()
+                self.network_pill.setText(
+                    {
+                        "offline": "本地离线",
+                        "cloud_pending": "联网待请求",
+                        "cloud": "联网增强",
+                        "fallback": "本地回退",
+                    }[mode]
+                )
+                note = (
+                    f"本次任务 {value['requests']} 次云端请求（含失败）；累计请求音频 {value['audio_seconds']:.1f} 秒（含重复窗口），"
+                    f"翻译输入 {value['text_characters']} 字。费用以百炼账单为准。"
+                )
+                if mode == "fallback":
+                    note = value["reason"] + "。本次任务不再联网，再次开始任务才重试。\n" + note
+                    self.status("已回退本地：" + value["reason"] + "。详情可查看顶部状态。", True)
+                self.network_pill.setToolTip(note)
             elif kind == "source":
                 self._change_transcript(
                     lambda: self.model.update_entry(key, source=value, status="翻译中")
@@ -1091,6 +1155,32 @@ class Window(QMainWindow):
             self.song_file_vocals = vocals.isChecked()
             self.view.doItemsLayout()
             self.view.viewport().update()
+
+    def cloud_settings(self):
+        if self.pending or self.listening or self.closing:
+            return
+        dialog = CloudDialog(self.cloud_config, self.cloud_enabled, self.cloud_remember, self)
+        if dialog.exec() == QDialog.Accepted:
+            self.cloud_config, self.cloud_enabled, self.cloud_remember = (
+                dialog.config,
+                dialog.enabled,
+                dialog.remember,
+            )
+            self.network_mode = "cloud_pending" if self.cloud_enabled else "offline"
+            if self.cloud_enabled:
+                self.profile_box.setCurrentIndex(1)
+            self.network_pill.setText("联网待请求" if self.cloud_enabled else "本地离线")
+            self.network_pill.setToolTip(
+                "音频与文字仅在启用后开始处理时发送至所选百炼地域；每次启动默认离线。"
+                if self.cloud_enabled
+                else "推理仅使用本机模型。"
+            )
+            self.source_changed()
+            self.status(
+                "联网增强已开启；开始处理时发送近期音频和待翻译文字，失败后回退本地。仍需准备本地段落修订模型。"
+                if self.cloud_enabled
+                else "联网增强已关闭，后续处理仅使用本地模型。"
+            )
 
     def closeEvent(self, event):
         if self.closing and not self.worker.is_alive():

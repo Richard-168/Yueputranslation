@@ -24,6 +24,7 @@ from canto_tts.backends.base import safe_prepare_text
 
 from . import model_runtime
 from .capture_process import CaptureProcess
+from .languages import ASR_LANGUAGES, UNSUPPORTED_SCRIPT
 from .numbers import spoken_numbers
 from .paths import DATA_DIR
 
@@ -31,11 +32,6 @@ ROOT = DATA_DIR
 # The native 4s setting is a soft VAD heuristic, not a hard cut. Keep its
 # normal edge context while bounding continuous BGM/singing segments.
 MAX_LIVE_SEGMENT_SECONDS = 4.5
-ASR_LANGUAGES = frozenset({"zh", "yue", "en"})
-UNSUPPORTED_SCRIPT = re.compile(
-    r"[\u3040-\u30ff\u31f0-\u31ff\uff66-\uff9f"
-    r"\u1100-\u11ff\u3130-\u318f\ua960-\ua97f\uac00-\ud7ff]"
-)
 
 
 class Cancelled(Exception):
