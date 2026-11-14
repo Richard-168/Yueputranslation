@@ -6,6 +6,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QSettings
 
+from .audio_profile import DEFAULT_SENSITIVITY, voice_profile
+
 
 def settings_store():
     return QSettings(QSettings.IniFormat, QSettings.UserScope, "YuePuTranslate", "Desktop")
@@ -16,6 +18,7 @@ class Preferences:
     mode: str = "pro"
     direction: str = "yue"
     audio_source: str = "microphone"
+    sensitivity: str = DEFAULT_SENSITIVITY
     autoplay: bool = True
     font_size: int = 15
     smooth: bool = True
@@ -25,6 +28,7 @@ class Preferences:
     export_directory: str = ""
 
     def validate(self):
+        voice_profile(self.sensitivity)
         for name, allowed in (
             ("mode", {"flash", "pro"}),
             ("direction", {"yue", "zh"}),

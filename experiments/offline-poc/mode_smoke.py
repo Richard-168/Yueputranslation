@@ -45,8 +45,12 @@ class Inference:
 
 
 class Capture:
+    selections = []
+
     def __init__(self, emit, error, started=None, **kwargs):
-        self.stream = (kwargs.get("segmenter_factory") or make_song_stream)(emit)
+        factory = kwargs.get("segmenter_factory") or make_song_stream
+        self.selections.append((factory.func.__name__, factory.keywords["sensitivity"]))
+        self.stream = factory(emit)
 
     def start(self):
         self.stream.feed(np.ones(4 * 16000, np.float32))
@@ -103,20 +107,50 @@ def main():
                 "pro",
             ]
             assert window.profile_box.currentText() == "pro"
+            assert window.sensitivity_box.currentData() == "standard"
+            assert [window.sensitivity_box.itemText(i) for i in range(2)] == ["标准", "灵敏"]
+            window.sensitivity_box.setCurrentIndex(1)
+            assert load_preferences().sensitivity == "sensitive"
             checks.append("default pro and flash/pro selector")
             for index in (1, 0):
-                window.profile_box.setCurrentIndex(index)
-                window.record_button.click()
-                wait_for(lambda: bool(window.model.items) and window.microphone is not None)
-                wait_for(lambda: bool(window.model.items[-1].source))
-                if index == 1:
-                    assert window.model.items[-1].source_confirmed == 0
-                    assert window.model.items[-1].status != "已确认"
-                window.record_button.click()
-                wait_for(lambda: window.pending == 0)
-                item = window.model.items[-1]
-                assert item.status == "已确认" and item.target
-                assert item.source == ("复核后的测试短句。" if index else "轻量草稿测试。")
+                for source in (0, 1):
+                    for sensitivity in ("standard", "sensitive"):
+                        window.profile_box.setCurrentIndex(index)
+                        window.source_box.setCurrentIndex(source)
+                        window.sensitivity_box.setCurrentIndex(
+                            window.sensitivity_box.findData(sensitivity)
+                        )
+                        previous_key = window.model.items[-1].key if window.model.items else 0
+                        window.record_button.click()
+                        wait_for(
+                            lambda: (
+                                bool(window.model.items)
+                                and window.model.items[-1].key > previous_key
+                                and window.microphone is not None
+                            )
+                        )
+                        assert not window.sensitivity_box.isEnabled()
+                        assert Capture.selections[-1] == (
+                            "make_song_stream" if index else "make_live_stream",
+                            sensitivity,
+                        )
+                        wait_for(lambda: bool(window.model.items[-1].source))
+                        if index == 1:
+                            assert window.model.items[-1].source_confirmed == 0
+                            assert window.model.items[-1].status != "已确认"
+                        window.record_button.click()
+                        wait_for(lambda: window.pending == 0)
+                        assert window.sensitivity_box.isEnabled()
+                        item = window.model.items[-1]
+                        assert item.status == "已确认" and item.target
+                        assert item.source == ("复核后的测试短句。" if index else "轻量草稿测试。")
+            checks.append("both saved sensitivities reach pro/flash capture on both audio sources")
+            with patch("yuepu_translate.desktop_qt.save_preferences", side_effect=OSError):
+                window.sensitivity_box.setCurrentIndex(0)
+            assert window.sensitivity_box.currentData() == "sensitive"
+            assert load_preferences().sensitivity == "sensitive"
+            assert "无法保存" in window.status_label.text()
+            checks.append("failed sensitivity save restores visible and stored selection")
             checks.append("real recording buttons, provisional/reviewed/final events in both modes")
 
             def send(kind, value):
@@ -186,6 +220,7 @@ def main():
                 dialog.direction.setCurrentIndex(dialog.direction.findData("zh"))
                 dialog.audio_source.setCurrentIndex(dialog.audio_source.findData("system"))
                 dialog.autoplay.setChecked(False)
+                dialog.sensitivity.setCurrentIndex(dialog.sensitivity.findData("standard"))
                 dialog.cache.setText(str(OUT / "cache"))
                 dialog.exports.setText(str(OUT / "exports"))
                 for i in range(3):
@@ -198,6 +233,7 @@ def main():
             window.settings_button.click()
             assert window.profile_box.currentText() == "flash"
             assert window.source_box.currentIndex() == 1
+            assert window.sensitivity_box.currentData() == "standard"
             assert cache_directory() == OUT / "cache"
             checks.append("settings Save via real modal, chosen cache path, immediate defaults")
             export = OUT / "exports/subtitles.txt"
@@ -241,6 +277,7 @@ def main():
             assert restored.profile_box.currentText() == "flash"
             assert restored.source_language() == "zh"
             assert restored.source_box.currentIndex() == 1
+            assert restored.sensitivity_box.currentData() == "standard"
             assert not restored.auto_box.isChecked()
             assert not restored.cloud_enabled
             assert load_preferences().export_directory == str(OUT / "exports")

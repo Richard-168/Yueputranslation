@@ -18,6 +18,23 @@ from yuepu_translate.preferences import (
 
 
 class PreferencesTests(unittest.TestCase):
+    def test_missing_sensitivity_defaults_to_standard_without_resetting_saved_options(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = QSettings(str(Path(folder) / "preferences.ini"), QSettings.IniFormat)
+            settings.setValue("defaults/mode", "flash")
+            settings.setValue("defaults/direction", "zh")
+            restored = load_preferences(settings)
+            self.assertEqual(getattr(restored, "sensitivity", None), "standard")
+            self.assertEqual(restored.mode, "flash")
+            self.assertEqual(restored.direction, "zh")
+
+    def test_invalid_saved_sensitivity_is_rejected(self):
+        with tempfile.TemporaryDirectory() as folder:
+            settings = QSettings(str(Path(folder) / "preferences.ini"), QSettings.IniFormat)
+            settings.setValue("defaults/sensitivity", "unknown")
+            with self.assertRaises(ValueError):
+                load_preferences(settings)
+
     def test_previous_paragraph_preference_maps_to_pro_without_resetting_other_options(self):
         with tempfile.TemporaryDirectory() as folder:
             settings = QSettings(str(Path(folder) / "preferences.ini"), QSettings.IniFormat)
@@ -52,6 +69,7 @@ class PreferencesTests(unittest.TestCase):
                 mode="flash",
                 direction="zh",
                 audio_source="system",
+                sensitivity="sensitive",
                 autoplay=False,
                 font_size=20,
                 smooth=False,
@@ -71,6 +89,7 @@ class PreferencesTests(unittest.TestCase):
             settings = QSettings(str(Path(folder) / "preferences.ini"), QSettings.IniFormat)
             for fields in (
                 dict(mode="unknown"),
+                dict(sensitivity="unknown"),
                 dict(cache_directory="relative"),
                 dict(export_directory="relative"),
                 dict(font_size=40),

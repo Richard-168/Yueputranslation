@@ -7,6 +7,7 @@ import threading
 import time
 from collections import OrderedDict, deque
 from dataclasses import replace
+from functools import partial
 from pathlib import Path
 
 from PySide6.QtCore import (
@@ -49,6 +50,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .audio_profile import VOICE_PROFILES, voice_profile
 from .cloud_config import CloudConfig, load_settings
 from .cloud_dialog import CloudDialog
 from .desktop_engine import AudioPlayer, Cancelled, Engine, Microphone, Request, SystemAudio
@@ -56,9 +58,15 @@ from .desktop_theme import STYLE, THEMES, TerminalEmpty, palette, stylesheet
 from .inference_control import InferenceCancelled
 from .live_session import LiveSession, make_live_stream
 from .paths import DATA_DIR
-from .preferences import Preferences, export_directory, load_preferences, settings_store
+from .preferences import (
+    Preferences,
+    export_directory,
+    load_preferences,
+    save_preferences,
+    settings_store,
+)
 from .settings_dialog import SettingsDialog
-from .song_pipeline import SongFile, SongSession
+from .song_pipeline import SongFile, SongSession, make_song_stream
 from .transcript_model import TranscriptEntry, TranscriptModel
 
 ROOT = DATA_DIR
@@ -402,6 +410,20 @@ class Window(QMainWindow):
         self.source_box.currentTextChanged.connect(self.source_changed)
         controls.addWidget(self.source_box)
         controls.addSpacing(8)
+        sensitivity_label = self.label("收音灵敏度", "section")
+        controls.addWidget(sensitivity_label)
+        self.sensitivity_box = QComboBox()
+        self.sensitivity_box.setAccessibleName("收音灵敏度")
+        sensitivity_label.setBuddy(self.sensitivity_box)
+        for key, profile in VOICE_PROFILES.items():
+            self.sensitivity_box.addItem(profile.label, key)
+        self.sensitivity_box.setToolTip("仅影响实时收音。停止收音后可切换，选择会自动保存。")
+        controls.addWidget(self.sensitivity_box)
+        self.sensitivity_hint = self.label("", "muted")
+        self.sensitivity_hint.setWordWrap(True)
+        controls.addWidget(self.sensitivity_hint)
+        self.sensitivity_box.currentIndexChanged.connect(self.sensitivity_changed)
+        controls.addSpacing(8)
         direction_heading = QHBoxLayout()
         direction_heading.addWidget(self.label("02 / 翻译方向", "section"))
         direction_heading.addStretch()
@@ -604,6 +626,29 @@ class Window(QMainWindow):
         if not self.pending and not self.listening:
             self.direction_box.setCurrentIndex(1 - self.direction_box.currentIndex())
 
+    def sensitivity_changed(self):
+        selected = self.sensitivity_box.currentData()
+        if selected == self.defaults.sensitivity:
+            return
+        candidate = replace(self.defaults, sensitivity=selected)
+        try:
+            save_preferences(candidate, self.preferences)
+        except (ValueError, OSError):
+            self.sensitivity_box.blockSignals(True)
+            self.sensitivity_box.setCurrentIndex(
+                self.sensitivity_box.findData(self.defaults.sensitivity)
+            )
+            self.sensitivity_box.blockSignals(False)
+            # QSettings buffers values even when sync fails. Restore the prior
+            # in-memory selection so a later flush does not silently switch it.
+            self.preferences.setValue("defaults/sensitivity", self.defaults.sensitivity)
+            self.status("无法保存收音灵敏度，已保留原档位；请检查设置目录权限后重试。", True)
+            return
+        self.defaults = candidate
+        profile = voice_profile(selected)
+        self.sensitivity_hint.setText(profile.description)
+        self.status(f"收音灵敏度已保存为“{profile.label}”，下次开始收音时使用。")
+
     def source_changed(self):
         if hasattr(self, "profile_box") and self.profile_box.currentIndex() == 1:
             self.mode_hint.setText(
@@ -707,6 +752,7 @@ class Window(QMainWindow):
         for box in (self.direction_box, self.source_box, self.swap_button, self.profile_box):
             box.setEnabled(idle and not self.listening)
         self.profile_box.setEnabled(idle and not self.listening)
+        self.sensitivity_box.setEnabled(idle and not self.listening)
         self.cloud_button.setEnabled(idle and not self.listening)
         self.settings_button.setEnabled(idle and not self.listening)
         for button in (self.translate_button, self.file_button):
@@ -919,7 +965,8 @@ class Window(QMainWindow):
             return
         epoch = self.epoch
         session = self.song_session
-        factory = make_live_stream if isinstance(session, LiveSession) else None
+        stream_factory = make_live_stream if isinstance(session, LiveSession) else make_song_stream
+        factory = partial(stream_factory, sensitivity=self.sensitivity_box.currentData())
 
         def error(message):
             self.events.put((epoch, 0, "capture_error", message))
@@ -1330,6 +1377,12 @@ class Window(QMainWindow):
             self.position_changed()
 
     def apply_preferences(self):
+        self.sensitivity_box.blockSignals(True)
+        self.sensitivity_box.setCurrentIndex(
+            self.sensitivity_box.findData(self.defaults.sensitivity)
+        )
+        self.sensitivity_box.blockSignals(False)
+        self.sensitivity_hint.setText(voice_profile(self.defaults.sensitivity).description)
         self.profile_box.setCurrentIndex(1 if self.defaults.mode == "pro" else 0)
         self.direction_box.setCurrentIndex(0 if self.defaults.direction == "yue" else 1)
         self.source_box.setCurrentIndex(0 if self.defaults.audio_source == "microphone" else 1)
@@ -1353,7 +1406,7 @@ class Window(QMainWindow):
         if dialog.exec() == QDialog.Accepted:
             self.defaults = dialog.preferences
             self.apply_preferences()
-            self.status("首选项已保存，已应用默认模式、阅读与文件位置设置。")
+            self.status("首选项已保存，已应用默认模式、收音灵敏度、阅读与文件位置设置。")
 
     def cloud_settings(self):
         if self.pending or self.listening or self.closing:

@@ -23,6 +23,7 @@ import soundfile as sf
 from canto_tts.backends.base import safe_prepare_text
 
 from . import model_runtime
+from .audio_profile import DEFAULT_SENSITIVITY, voice_profile
 from .capture_process import CaptureProcess
 from .languages import ASR_LANGUAGES, UNSUPPORTED_SCRIPT
 from .numbers import spoken_numbers
@@ -555,11 +556,19 @@ class PlaybackProcessor:
         self.paused = True
 
 
-def make_vad():
+def make_vad(*, live=False, sensitivity=DEFAULT_SENSITIVITY):
+    profile = voice_profile(sensitivity)
     config = sherpa_onnx.VadModelConfig()
     config.silero_vad.model = str(ROOT / "models/vad/silero_vad.onnx")
-    config.silero_vad.min_silence_duration = 0.65
-    config.silero_vad.min_speech_duration = 0.25
+    # RollingAudio already waits for the mode's pause. A second long VAD
+    # hangover can join separate short replies and postpone their review.
+    config.silero_vad.min_silence_duration = 0.15 if live else 0.65
+    # The file gate's 250 ms onset can discard an entire one-syllable reply.
+    # Live captions need a shorter onset; paragraph/flash pause rules still
+    # belong to their existing RollingAudio configuration.
+    config.silero_vad.min_speech_duration = profile.min_speech_seconds if live else 0.25
+    if live:
+        config.silero_vad.threshold = profile.threshold
     config.silero_vad.max_speech_duration = 4
     config.sample_rate = 16000
     return sherpa_onnx.VoiceActivityDetector(config, buffer_size_in_seconds=15)

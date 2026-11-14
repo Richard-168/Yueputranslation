@@ -43,7 +43,11 @@ README 中的 `unittest` 检查不下载模型、不打开麦克风或扬声器�
 
 ## flash 与 pro
 
-pro 是原 `SongSession` 段落修订的增强，仍使用同一个 `make_voice_detector` / `make_song_stream`。检测器、停顿约 2 秒、前导 2 秒、上下文 8 秒、重叠 2 秒、连续约 15 秒分段上限均保持原值；只把草稿采样从 4 秒/2 秒改成首个 0.8 秒、随后约每 0.64 秒。`test_paragraph_live.py` 比较原参数基线与新流的所有 checkpoint/final 音频边界，要求完全相同。
+pro 是原 `SongSession` 段落修订的增强，仍使用同一个 `make_voice_detector` / `make_song_stream`。段落停顿约 2 秒、前导 2 秒、上下文 8 秒、重叠 2 秒、连续约 15 秒分段上限均保持原值；草稿采样从 4 秒/2 秒改成首个 0.8 秒、随后约每 0.64 秒。`test_paragraph_live.py` 在相同检测结果下比较原参数基线与新流的所有 checkpoint/final 音频边界，要求完全相同。
+
+`audio_profile.py` 统一维护两档实时收音参数。标准档默认使用 Silero 阈值 0.5、最短人声 0.128 秒，不增加检测器输入增益；灵敏档保留阈值 0.35、最短人声 0.096 秒、最多 8 倍的检测增益。两档内部静音等待均为 0.15 秒，避免与模式自身的停顿规则叠加。增益不衰减响亮输入，保留的 PCM、ASR 输入和译音音量不变。文件人声检测及旧 `SpeechSegmenter` 继续使用原门槛。静音、噪声与真实收音效果须分别验证，门控参数不代表准确率或端到端延迟保证，也不承担指定说话人识别。
+
+`Preferences.sensitivity` 只接受 `standard` / `sensitive`，旧设置缺失时使用标准档。主界面切换立即保存，保存失败恢复原选择；设置对话框 Save/Cancel 沿用既有行为。开始收音时将当前选择快照传给同一个流工厂，pro/flash 及两种音源均如此；收音或处理期间禁用切换。
 
 实时 `SongSession.run` 委托 `paragraph_live.run_live`：主任务调用基础 SenseVoice 显示暂定原文，不冻结轻量结果；独立复核线程拥有唯一 `SessionInference`，优先处理原有检查点和句末，同时合并待翻译草稿。检查点使用 `ParagraphRevision` 衔接已退出音频窗口的前文，不制造停顿、不固定猜测；同一有界邮箱的草稿任务调用 `IncrementalTranslation` 生成暂定译文，不触发播报。草稿变化约每 2.5 秒至多重译一次，未变化内容复用缓存，确认任务优先。句末固定原文后再调用 `IncrementalTranslation` 翻译新增确认记录，再按设置播报。一个推理实例继续持有同任务 ASR/翻译的首次云失败回退状态，无需跨线程共享云客户端。文件仍走原 `SongFile` 路径。
 

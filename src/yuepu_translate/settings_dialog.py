@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .audio_profile import VOICE_PROFILES
 from .paths import DATA_DIR
 from .preferences import Preferences, default_cache_directory, export_directory, save_preferences
 
@@ -26,6 +27,7 @@ class SettingsDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("设置与首选项")
         self.setMinimumWidth(620)
+        self.setMinimumHeight(640)
         self.settings_store = settings
         self.preferences = preferences
         layout = QVBoxLayout(self)
@@ -82,6 +84,25 @@ class SettingsDialog(QDialog):
             ],
             preferences.audio_source,
         )
+        self.sensitivity = combo(
+            general,
+            "默认收音灵敏度",
+            "default_sensitivity",
+            [(profile.label, key) for key, profile in VOICE_PROFILES.items()],
+            preferences.sensitivity,
+        )
+        sensitivity_hint = QLabel()
+        sensitivity_hint.setWordWrap(True)
+
+        def describe_sensitivity():
+            profile = VOICE_PROFILES[self.sensitivity.currentData()]
+            sensitivity_hint.setText(
+                profile.description + " 仅影响实时收音，不能只锁定指定说话人。"
+            )
+
+        self.sensitivity.currentIndexChanged.connect(describe_sensitivity)
+        describe_sensitivity()
+        general.addRow(sensitivity_hint)
         self.autoplay = QCheckBox("确认后自动播报译音（设备收音期间始终关闭）")
         self.autoplay.setChecked(preferences.autoplay)
         general.addRow(self.autoplay)
@@ -180,6 +201,7 @@ class SettingsDialog(QDialog):
             mode=self.mode.currentData(),
             direction=self.direction.currentData(),
             audio_source=self.audio_source.currentData(),
+            sensitivity=self.sensitivity.currentData(),
             autoplay=self.autoplay.isChecked(),
             font_size=self.font_size.value(),
             smooth=self.smooth.isChecked(),

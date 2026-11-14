@@ -21,6 +21,7 @@ from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from yuepu_translate import model_runtime
+from yuepu_translate.audio_profile import DEFAULT_SENSITIVITY, VOICE_PROFILES
 from yuepu_translate.desktop_engine import PlaybackProcessor, SpeechSegmenter
 from yuepu_translate.desktop_qt import STYLE, Window
 from yuepu_translate.desktop_theme import THEMES
@@ -172,6 +173,7 @@ def main():
     parser.add_argument("--repeat", type=int, default=1, choices=range(1, 7))
     parser.add_argument("--history-rows", type=int, default=0, choices=(0, 2000, 10000))
     parser.add_argument("--profile", choices=("flash", "pro"), default="pro")
+    parser.add_argument("--sensitivity", choices=tuple(VOICE_PROFILES), default=DEFAULT_SENSITIVITY)
     args = parser.parse_args()
     args.output = args.output.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
@@ -202,6 +204,7 @@ def main():
     window.direction_box.setCurrentIndex(0 if args.source == "yue" else 1)
     window.source_box.setCurrentIndex(int(args.device))
     window.profile_box.setCurrentIndex(int(args.profile == "pro"))
+    window.sensitivity_box.setCurrentIndex(window.sensitivity_box.findData(args.sensitivity))
     # Even when checked, device capture must suppress automatic speech.
     window.auto_box.setChecked(args.device or args.speak)
     window._buttons()
@@ -327,6 +330,7 @@ def main():
         history_rows=args.history_rows,
         repeat=args.repeat,
         profile=args.profile,
+        sensitivity=args.sensitivity,
         speech="real local TTS into muted PCM" if args.speak and not args.device else "disabled",
     )
     try:

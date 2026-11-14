@@ -4,6 +4,7 @@ import threading
 import time
 from dataclasses import dataclass
 
+from .audio_profile import DEFAULT_SENSITIVITY
 from .enhanced_inference import SessionInference
 from .inference_control import check_cancel
 from .paragraphs import ParagraphRevision, accept_punctuation
@@ -11,11 +12,11 @@ from .song_stream import RollingAudio, SongMailbox
 from .translation_state import IncrementalTranslation
 
 
-def make_live_stream(emit, detector=None):
+def make_live_stream(emit, detector=None, *, sensitivity=DEFAULT_SENSITIVITY):
     if detector is None:
         from .song_pipeline import make_voice_detector
 
-        detector = make_voice_detector()
+        detector = make_voice_detector(live=True, sensitivity=sensitivity)
     return RollingAudio(
         emit,
         detector=detector,

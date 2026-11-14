@@ -5,6 +5,7 @@ from pathlib import Path
 
 import numpy as np
 
+from .audio_profile import DEFAULT_SENSITIVITY, voice_profile
 from .enhanced_inference import SessionInference
 from .inference_control import InferenceCancelled, check_cancel
 from .paragraphs import ParagraphRevision, accept_punctuation
@@ -12,15 +13,23 @@ from .song_stream import SongMailbox, SongWindow, draft_fits, trim_context
 from .translation_state import IncrementalTranslation
 
 
-def make_voice_detector():
-    """Shared native voice gate for live and file audio."""
+def make_voice_detector(*, live=False, sensitivity=DEFAULT_SENSITIVITY):
+    """Native voice gate; live input also admits short and quiet replies."""
     from .desktop_engine import make_vad
 
-    vad = make_vad()
+    profile = voice_profile(sensitivity)
+    vad = make_vad(live=live, sensitivity=sensitivity)
 
     def activity(frame):
         if len(frame) < 512:
             frame = np.pad(frame, (0, 512 - len(frame)))
+        if live and profile.max_gain > 1:
+            # Boost only the detector's copy, at most 8x. Raw PCM, ASR input,
+            # playback and file processing retain their original amplitude.
+            peak = float(np.max(np.abs(frame)))
+            gain = max(1.0, min(profile.max_gain, 0.1 / max(peak, 0.0001)))
+            if gain > 1:
+                frame = frame * gain
         vad.accept_waveform(frame)
         while not vad.empty():
             vad.pop()
@@ -29,13 +38,13 @@ def make_voice_detector():
     return activity
 
 
-def make_song_stream(emit):
+def make_song_stream(emit, *, sensitivity=DEFAULT_SENSITIVITY):
     """Native voice activity gates inference; it never cuts audio into UI rows."""
     from .song_stream import RollingAudio
 
     return RollingAudio(
         emit,
-        detector=make_voice_detector(),
+        detector=make_voice_detector(live=True, sensitivity=sensitivity),
         first_seconds=0.8,
         update_seconds=0.64,
         context_seconds=8,
