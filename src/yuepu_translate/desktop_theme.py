@@ -1,5 +1,7 @@
 """Industrial terminal presentation; all desktop colors have one owner."""
 
+from pathlib import Path
+
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPainterPath, QPalette, QPen, QPolygonF
 from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
@@ -118,12 +120,21 @@ def stylesheet(name="dark"):
     QComboBox::drop-down {{ border:0; width:24px; }}
     QComboBox QAbstractItemView {{ background:{panel}; color:{text};
         selection-background-color:{selected}; selection-color:{text}; padding:5px; }}
-    QCheckBox {{ spacing:8px; background:transparent; }}
+    QCheckBox {{ spacing:10px; background:transparent; min-height:28px;
+        border:1px solid transparent; padding:2px; }}
+    QCheckBox:focus {{ border:1px dotted {text}; }}
     QCheckBox:disabled {{ color:{disabled}; }}
-    QCheckBox::indicator {{ width:16px; height:16px; border:1px solid {control_border};
+    QCheckBox::indicator {{ width:20px; height:20px; border:2px solid {control_border};
         border-radius:0; background:{field}; }}
-    QCheckBox::indicator:checked {{ background:{accent}; border:4px solid {on_accent}; }}
-    QCheckBox::indicator:focus {{ border:2px solid {text}; }}
+    QCheckBox::indicator:unchecked:hover {{ border-color:{text}; background:{hover}; }}
+    QCheckBox::indicator:checked {{ background:{accent}; border-color:{on_accent};
+        image:url("{checkmark}"); }}
+    QCheckBox::indicator:checked:hover {{ background:{accent_hover}; }}
+    QCheckBox::indicator:pressed {{ background:{selected}; }}
+    QCheckBox::indicator:checked:pressed {{ background:{accent_pressed}; }}
+    QCheckBox::indicator:disabled {{ background:{raised}; border-color:{disabled}; }}
+    QCheckBox::indicator:checked:disabled {{ background:{control_border};
+        border-color:{disabled}; }}
     QPlainTextEdit {{ background:{field}; border:1px solid {control_border}; border-radius:0;
         padding:12px; selection-background-color:{selected}; selection-color:{text}; }}
     QListView {{ background:{paper}; border:0; outline:0; }}
@@ -139,6 +150,7 @@ def stylesheet(name="dark"):
     QToolTip {{ background:{text}; color:{bg}; border:0; padding:8px; }}
     """.format(
         **c,
+        checkmark=(Path(__file__).parent / "assets" / "checkmark.svg").as_posix(),
         dark_swatch=THEMES["dark"]["panel"],
         dark_swatch_text=THEMES["dark"]["text"],
         light_swatch=THEMES["light"]["panel"],
