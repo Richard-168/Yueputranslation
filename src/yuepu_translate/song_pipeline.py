@@ -36,6 +36,8 @@ def make_song_stream(emit):
     return RollingAudio(
         emit,
         detector=make_voice_detector(),
+        first_seconds=0.8,
+        update_seconds=0.64,
         context_seconds=8,
         overlap_seconds=2,
         max_segment_seconds=15,
@@ -57,6 +59,11 @@ class SongSession:
             yield window
 
     def run(self, engine, player, cancel, emit):
+        if not self.file_mode:
+            from .paragraph_live import run_live
+
+            return run_live(self, engine, player, cancel, emit, SessionInference)
+
         from .desktop_engine import UNSUPPORTED_SCRIPT, Cancelled
 
         inference = SessionInference(self.source, self.cloud_config, emit)

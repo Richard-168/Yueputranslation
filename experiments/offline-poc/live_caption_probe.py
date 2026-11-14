@@ -16,12 +16,14 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import numpy as np
 import soundfile as sf
+from PySide6.QtCore import QSettings
 from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QApplication
 
 from yuepu_translate import model_runtime
 from yuepu_translate.desktop_engine import PlaybackProcessor, SpeechSegmenter
 from yuepu_translate.desktop_qt import STYLE, Window
+from yuepu_translate.desktop_theme import THEMES
 from yuepu_translate.local_inference import LocalInference
 from yuepu_translate.song_pipeline import make_song_stream
 from yuepu_translate.transcript_model import TranscriptEntry
@@ -135,7 +137,10 @@ def check_confirmed_spans(window, output):
         fragment = iterator.fragment()
         fragments.append((fragment.text(), fragment.charFormat().foreground().color().name()))
         iterator += 1
-    assert fragments == [(target_prefix, "#edf3fd"), ("末尾仍在校正", "#9daec5")], fragments
+    colors = THEMES[window.theme]
+    assert fragments == [(target_prefix, colors["text"]), ("末尾仍在校正", colors["draft"])], (
+        fragments
+    )
     for _ in range(20):
         window.model.update_entry(row.key, status="亮色已固定 · 浅色暂定")
         window.delegate.documents(row, window.view.viewport().width())
@@ -158,11 +163,22 @@ def main():
     parser.add_argument("audio", type=Path)
     parser.add_argument("--source", choices=("zh", "yue"), required=True)
     parser.add_argument("--device", action="store_true", help="Exercise device-input UI wiring")
+    parser.add_argument(
+        "--speak",
+        action="store_true",
+        help="Generate real TTS into muted PCM; never opens speakers",
+    )
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repeat", type=int, default=1, choices=range(1, 7))
     parser.add_argument("--history-rows", type=int, default=0, choices=(0, 2000, 10000))
-    parser.add_argument("--profile", choices=("live", "paragraph"), default="live")
+    parser.add_argument("--profile", choices=("flash", "pro"), default="pro")
     args = parser.parse_args()
+    args.output = args.output.resolve()
+    args.output.mkdir(parents=True, exist_ok=True)
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(args.output / "settings"))
+    preferences = QSettings(QSettings.IniFormat, QSettings.UserScope, "YuePuTranslate", "Desktop")
+    preferences.setValue("defaults/cache_directory", str(args.output / "cache"))
+    preferences.sync()
     audio, rate = sf.read(args.audio, dtype="float32", always_2d=True)
     if not 0 < len(audio) <= rate * 30:
         parser.error("Use a local speech sample of at most 30 seconds")
@@ -177,12 +193,17 @@ def main():
     app.setStyleSheet(STYLE)
     window = Window(muted=True)
     window.engine.asr = model_runtime.recognizer()
+    if args.speak and not args.device:
+        if args.source == "yue":
+            window.engine.zh_tts = model_runtime.mandarin_engine()
+        else:
+            window.engine.yue_tts = model_runtime.canto_engine()
     window.ready = True
     window.direction_box.setCurrentIndex(0 if args.source == "yue" else 1)
     window.source_box.setCurrentIndex(int(args.device))
-    window.profile_box.setCurrentIndex(int(args.profile == "paragraph"))
+    window.profile_box.setCurrentIndex(int(args.profile == "pro"))
     # Even when checked, device capture must suppress automatic speech.
-    window.auto_box.setChecked(args.device)
+    window.auto_box.setChecked(args.device or args.speak)
     window._buttons()
     for key in range(args.history_rows):
         text = "历史字幕负载测试，已固定的内容不重新翻译。"
@@ -203,6 +224,7 @@ def main():
     args.output.mkdir(parents=True, exist_ok=True)
     started, feed_done = threading.Event(), threading.Event()
     timing, sources, capture_errors, inference_calls, runtime_errors = {}, [], [], [], []
+    translation_updates = []
     original_status = window.status
 
     def status(text, error=False):
@@ -296,13 +318,16 @@ def main():
 
     report = dict(
         input="paced local PCM injection; no physical device",
-        asr="real Qwen3-ASR-1.7B" if args.profile == "paragraph" else "real SenseVoice",
+        asr="real SenseVoice drafts + Qwen3-ASR-1.7B paragraph review"
+        if args.profile == "pro"
+        else "real SenseVoice",
         translation="real local Hy-MT2",
         source=args.source,
         device_ui=args.device,
         history_rows=args.history_rows,
         repeat=args.repeat,
         profile=args.profile,
+        speech="real local TTS into muted PCM" if args.speak and not args.device else "disabled",
     )
     try:
         with (
@@ -314,6 +339,7 @@ def main():
             window.record_button.click()
             deadline = time.monotonic() + 90
             last = {item.key: item.source for item in window.model.items}
+            last_targets = {}
             stopped = False
             while time.monotonic() < deadline:
                 app.processEvents()
@@ -334,6 +360,20 @@ def main():
                             last[item.key] = item.source
                             if len(sources) == 1:
                                 window.grab().save(str(args.output / "first-source.png"))
+                        if item.target and last_targets.get(item.key) != item.target:
+                            translation_updates.append(
+                                dict(
+                                    seconds=round(time.monotonic() - timing["start"], 3),
+                                    row=item.key,
+                                    text=item.target,
+                                    status=item.status,
+                                    source_confirmed=item.source_confirmed,
+                                    target_confirmed=item.target_confirmed,
+                                )
+                            )
+                            last_targets[item.key] = item.target
+                            if not item.target_confirmed:
+                                window.grab().save(str(args.output / "coarse-translation.png"))
                         if item.target_confirmed and item.target_confirmed < len(item.target):
                             window.grab().save(str(args.output / "mixed-spans.png"))
                 if feed_done.is_set() and not stopped:
@@ -348,6 +388,7 @@ def main():
             report.update(
                 first_source_seconds=sources[0]["seconds"] if sources else None,
                 source_updates=sources,
+                translation_updates=translation_updates,
                 errors=capture_errors + runtime_errors,
                 rows=[
                     dict(source=item.source, target=item.target, status=item.status)
@@ -355,7 +396,10 @@ def main():
                     if item.key > args.history_rows
                 ],
                 inference_calls=inference_calls,
+                generated_pcm_chunks=len(window.player.chunks),
             )
+            if args.speak and not args.device:
+                assert window.player.chunks, "Confirmed translation must generate muted PCM"
             if (
                 not sources
                 or not any(
@@ -395,7 +439,8 @@ def main():
                 {
                     key: value
                     for key, value in report.items()
-                    if key not in {"source_updates", "rows", "inference_calls"}
+                    if key
+                    not in {"source_updates", "translation_updates", "rows", "inference_calls"}
                 },
                 ensure_ascii=False,
             )

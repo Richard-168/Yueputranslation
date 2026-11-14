@@ -57,7 +57,7 @@ class SettingsDialog(QDialog):
             "默认模式",
             "default_mode",
             [
-                ("pro · 段落修订", "pro"),
+                ("pro · 段落断句，实时草稿与句末复核", "pro"),
                 ("flash · 轻量实时字幕", "flash"),
             ],
             preferences.mode,
@@ -86,7 +86,7 @@ class SettingsDialog(QDialog):
         self.autoplay.setChecked(preferences.autoplay)
         general.addRow(self.autoplay)
         note = QLabel(
-            "pro 使用较大模型滚动识别并修订当前段落；需要 song-asr-large。\n"
+            "pro 保留原段落检测与断句，原文和粗译先显示，句末由较大模型复核并修正；需要 song-asr-large。\n"
             "flash 保留轻量实时处理。联网增强由“联网设置”独立开启，重启后默认关闭。"
         )
         note.setWordWrap(True)

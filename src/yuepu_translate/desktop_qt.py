@@ -288,6 +288,7 @@ class Window(QMainWindow):
         self.song_session = None
         self.song_keys = {}
         self.live_versions = {}
+        self.live_preview_versions = {}
         self.song_final_block = -1
         self.song_file_vocals = self.defaults.vocals
         self.cloud_enabled = False
@@ -420,7 +421,7 @@ class Window(QMainWindow):
         self.profile_box.addItems(["flash", "pro"])
         self.profile_box.setAccessibleName("识别模式")
         self.profile_box.setToolTip(
-            "flash：轻量实时字幕，译文随后更新。\npro：较大模型滚动识别当前段落，保留固定前文并修订末尾。"
+            "flash：轻量实时字幕，译文随后更新。\npro：保留段落检测与断句，轻量草稿先显示，句末由较大模型复核确认。"
         )
         self.profile_box.currentIndexChanged.connect(self.source_changed)
         controls.addWidget(self.profile_box)
@@ -606,7 +607,7 @@ class Window(QMainWindow):
     def source_changed(self):
         if hasattr(self, "profile_box") and self.profile_box.currentIndex() == 1:
             self.mode_hint.setText(
-                "pro：前文已固定，末尾仍可修订；只翻译新增内容，长讲话分段保留。"
+                "pro：原文和粗译随说话更新，保留原段落断句；句末复核后修正并确认。"
                 + (
                     "设备收音期间仅字幕。"
                     if self.source_box.currentIndex() == 1
@@ -623,7 +624,7 @@ class Window(QMainWindow):
                 + (
                     " 本次任务已回退本地，不再上传；再次开始任务才尝试联网。"
                     if self.network_mode == "fallback"
-                    else " 联网增强：pro 上传近期音频与待翻译文字；flash 仅上传待翻译文字。"
+                    else " 联网增强：pro 上传复核音频与待翻译文字（含粗译）；flash 仅上传待翻译文字。"
                 )
             )
         self._buttons()
@@ -888,6 +889,7 @@ class Window(QMainWindow):
         self.player.stop()
         self.song_keys.clear()
         self.live_versions.clear()
+        self.live_preview_versions.clear()
         self.song_final_block = -1
         if self.profile_box.currentIndex() == 1:
             self.song_session = SongSession(
@@ -939,7 +941,7 @@ class Window(QMainWindow):
             )
         self.microphone.start()
         self.status(
-            "pro 段落修订已开始，正在等待第一段人声…"
+            "pro 已开始：轻量草稿实时显示，按原段落规则断句后复核…"
             if isinstance(session, SongSession)
             else "flash 已开始：原文随说话更新，译文随后显示…"
         )
@@ -982,6 +984,7 @@ class Window(QMainWindow):
                     key, status="已取消" if not item.target else "暂定 · 已停止"
                 )
         self.active_ids.clear()
+        self.live_preview_versions.clear()
         self.status(
             "正在停止处理，已有字幕已保留…"
             if self.pending
@@ -1094,6 +1097,8 @@ class Window(QMainWindow):
             elif kind == "song_ready":
                 self._start_song_capture()
             elif kind == "live_source":
+                if value["version"] <= self.live_versions.get(value["block"], -1):
+                    continue
                 row_key = self._song_key(value["block"])
                 self.live_versions[value["block"]] = value["version"]
                 self._change_transcript(
@@ -1103,6 +1108,8 @@ class Window(QMainWindow):
                         source_confirmed=value.get("frozen_characters", 0),
                         status="原文已固定 · 译文更新中"
                         if value["final"]
+                        else "暂定 · 待复核"
+                        if value.get("reviewing")
                         else "亮色已固定 · 浅色暂定",
                     )
                 )
@@ -1119,6 +1126,26 @@ class Window(QMainWindow):
                 row_key = self.song_keys.get(block)
                 item = self.model.by_key.get(row_key)
                 if item is None:
+                    continue
+                if value.get("preview") and not value["final"]:
+                    # Translation can trail the still-changing source. Keep the
+                    # latest available rough result, but never revise fixed text.
+                    if (
+                        item.source_confirmed == len(item.source)
+                        or item.target_confirmed
+                        or value["version"] > current_version
+                        or value["version"] <= self.live_preview_versions.get(block, -1)
+                    ):
+                        continue
+                    self.live_preview_versions[block] = value["version"]
+                    self._change_transcript(
+                        lambda: self.model.update_entry(
+                            row_key,
+                            target=value["text"],
+                            target_confirmed=0,
+                            status="粗略译文 · 待复核",
+                        )
+                    )
                     continue
                 frozen_target = value.get("frozen_target", value["text"] if value["final"] else "")
                 if current_version != value["version"]:
@@ -1153,10 +1180,12 @@ class Window(QMainWindow):
                     self.active_ids.discard(row_key)
                     self.song_keys.pop(block, None)
                     self.live_versions.pop(block, None)
+                    self.live_preview_versions.pop(block, None)
             elif kind == "live_empty":
                 block = value["block"]
                 row_key = self.song_keys.pop(block, None)
                 self.live_versions.pop(block, None)
+                self.live_preview_versions.pop(block, None)
                 if row_key is not None:
                     self._change_transcript(
                         lambda: self.model.update_entry(row_key, status="暂定 · 未确认")
@@ -1345,7 +1374,7 @@ class Window(QMainWindow):
             )
             self.source_changed()
             self.status(
-                "联网增强已开启；pro 上传近期音频与待翻译文字，flash 上传待翻译文字。失败后本次任务回退本地。"
+                "联网增强已开启；pro 上传复核音频与待翻译文字（含粗译），flash 上传待翻译文字。失败后本次任务回退本地。"
                 if self.cloud_enabled
                 else "联网增强已关闭，后续处理仅使用本地模型。"
             )
