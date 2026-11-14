@@ -181,10 +181,21 @@ class CloudDialog(QDialog):
         try:
             config = self.candidate()
             save_settings(config, self.remember_box.isChecked())
-        except (ValueError, OSError, RuntimeError) as exc:
-            self.feedback.setText(
-                str(exc) if not isinstance(exc, OSError) else "无法保存设置，请检查本机目录权限。"
-            )
+        except OSError:
+            if self.remember_box.isChecked():
+                self.feedback.setText(
+                    "无法在本机记住密钥，请检查配置目录权限或文件是否被占用。\n"
+                    "可取消勾选“使用当前 Windows 账户加密记住密钥”，再点 Save，"
+                    "仅在本次运行中使用；不会自动改成明文保存。"
+                )
+            else:
+                self.feedback.setText(
+                    "无法清除本机已记住的密钥，请检查配置目录权限或文件是否被占用。"
+                    "旧配置仍可能保留，本次设置尚未保存。"
+                )
+            return
+        except (ValueError, RuntimeError) as exc:
+            self.feedback.setText(str(exc))
             return
         self.config = config
         self.enabled = self.enable_box.isChecked()
