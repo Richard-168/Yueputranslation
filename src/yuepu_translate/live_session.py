@@ -48,11 +48,12 @@ class LiveSession:
     one draft and three pending confirmed jobs wait on either lane.
     """
 
-    def __init__(self, source, autoplay=False, number_mode="original"):
+    def __init__(self, source, autoplay=False, number_mode="original", cloud=None):
         if source not in {"yue", "zh"}:
             raise ValueError("请选择粤语或普通话方向。")
         self.source, self.autoplay, self.number_mode = source, autoplay, number_mode
         self.mailbox = SongMailbox()
+        self.cloud_config = cloud
 
     def run(self, engine, player, cancel, emit):
         translations = SongMailbox()
@@ -62,7 +63,9 @@ class LiveSession:
         def translate():
             inference = None
             try:
-                inference = SessionInference(self.source, None, emit, roles=("translation",))
+                inference = SessionInference(
+                    self.source, self.cloud_config, emit, roles=("translation",)
+                )
                 inference.start(cancel)
                 translated_block, state, preview_at = -1, None, 0
                 while (job := translations.get(cancel)) is not None:

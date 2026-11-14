@@ -19,6 +19,7 @@ import soundfile as sf
 from .inference_control import InferenceCancelled as InferenceCancelled
 from .inference_control import check_cancel
 from .paths import DATA_DIR
+from .preferences import cache_directory
 
 ASR_DIR = "models/song-asr-large"
 ASR_MODEL = f"{ASR_DIR}/Qwen3-ASR-1.7B-Q8_0.gguf"
@@ -50,7 +51,9 @@ class LocalInference:
         required = [SERVER, ASR_MODEL, ASR_PROJECTOR] if self.role == "asr" else [SERVER, MT_MODEL]
         if any(not (self.root / path).is_file() for path in required):
             raise RuntimeError(
-                "歌曲模型文件不完整，请按 docs/development.md 准备 Qwen3-ASR-1.7B 和本地推理程序。"
+                "pro 段落模型不完整，请准备 song-asr-large 和本地推理程序；也可选择 flash。"
+                if self.role == "asr"
+                else "本地翻译模型不完整，请准备 hymt2 和本地推理程序。"
             )
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", 0))
@@ -81,7 +84,7 @@ class LocalInference:
             "1",
         ]
         if self.role == "asr":
-            self.temp = tempfile.TemporaryDirectory(prefix="yuepu-asr-")
+            self.temp = tempfile.TemporaryDirectory(prefix="yuepu-asr-", dir=cache_directory())
             template = Path(self.temp.name) / "language.jinja"
             language = "Cantonese" if self.source == "yue" else "Chinese"
             template.write_text(

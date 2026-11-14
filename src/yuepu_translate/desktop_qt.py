@@ -13,7 +13,6 @@ from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     QPropertyAnimation,
-    QSettings,
     QSize,
     Qt,
     QTimer,
@@ -35,9 +34,7 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
-    QDialogButtonBox,
     QFileDialog,
-    QFormLayout,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -47,7 +44,6 @@ from PySide6.QtWidgets import (
     QPlainTextEdit,
     QPushButton,
     QScrollArea,
-    QSpinBox,
     QStyledItemDelegate,
     QVBoxLayout,
     QWidget,
@@ -60,6 +56,8 @@ from .desktop_theme import STYLE, THEMES, TerminalEmpty, palette, stylesheet
 from .inference_control import InferenceCancelled
 from .live_session import LiveSession, make_live_stream
 from .paths import DATA_DIR
+from .preferences import Preferences, export_directory, load_preferences, settings_store
+from .settings_dialog import SettingsDialog
 from .song_pipeline import SongFile, SongSession
 from .transcript_model import TranscriptEntry, TranscriptModel
 
@@ -268,9 +266,13 @@ class SmoothTranscriptView(QListView):
 class Window(QMainWindow):
     def __init__(self, muted=False):
         super().__init__()
-        self.preferences = QSettings(
-            QSettings.IniFormat, QSettings.UserScope, "YuePuTranslate", "Desktop"
-        )
+        self.preferences = settings_store()
+        preference_warning = ""
+        try:
+            self.defaults = load_preferences(self.preferences)
+        except (ValueError, TypeError):
+            self.defaults = Preferences()
+            preference_warning = "已保存的首选项无法读取，已使用默认设置；请在设置中重新保存。"
         self.theme = "dark"
         self.setWindowTitle("粤普随译 · YUEPU TERMINAL")
         self.resize(1240, 850)
@@ -287,7 +289,7 @@ class Window(QMainWindow):
         self.song_keys = {}
         self.live_versions = {}
         self.song_final_block = -1
-        self.song_file_vocals = False
+        self.song_file_vocals = self.defaults.vocals
         self.cloud_enabled = False
         self.network_mode = "offline"
         self.cloud_config = CloudConfig()
@@ -304,6 +306,7 @@ class Window(QMainWindow):
         self.active_ids = set()
         self.unread = 0
         self._build()
+        self.apply_preferences()
         self.apply_theme(self.preferences.value("appearance", "dark"), persist=False)
         self.source_changed()
         self.worker = threading.Thread(target=self._worker, daemon=True)
@@ -318,6 +321,8 @@ class Window(QMainWindow):
         self._buttons()
         if cloud_warning:
             self.status(cloud_warning, True)
+        elif preference_warning:
+            self.status(preference_warning, True)
 
     def button(self, text, callback, kind="", parent=None):
         button = QPushButton(text, parent)
@@ -362,7 +367,8 @@ class Window(QMainWindow):
         top.addSpacing(8)
         self.cloud_button = self.button("联网设置", self.cloud_settings, "quiet")
         top.addWidget(self.cloud_button)
-        top.addWidget(self.button("设置", self.settings, "quiet"))
+        self.settings_button = self.button("设置", self.settings, "quiet")
+        top.addWidget(self.settings_button)
         root.addWidget(header)
 
         content = QWidget()
@@ -411,10 +417,10 @@ class Window(QMainWindow):
         controls.addSpacing(8)
         controls.addWidget(self.label("03 / 识别与播报", "section"))
         self.profile_box = QComboBox()
-        self.profile_box.addItems(["会话（实时字幕）", "段落修订（实验）"])
+        self.profile_box.addItems(["flash", "pro"])
         self.profile_box.setAccessibleName("识别模式")
         self.profile_box.setToolTip(
-            "会话：边说边显示原文，翻译随后更新。\n段落修订：使用较大的模型复核整段，等待较长。"
+            "flash：轻量实时字幕，译文随后更新。\npro：较大模型滚动识别当前段落，保留固定前文并修订末尾。"
         )
         self.profile_box.currentIndexChanged.connect(self.source_changed)
         controls.addWidget(self.profile_box)
@@ -600,7 +606,7 @@ class Window(QMainWindow):
     def source_changed(self):
         if hasattr(self, "profile_box") and self.profile_box.currentIndex() == 1:
             self.mode_hint.setText(
-                "前文已固定，末尾仍可修订；只翻译新增内容，长讲话分段保留。"
+                "pro：前文已固定，末尾仍可修订；只翻译新增内容，长讲话分段保留。"
                 + (
                     "设备收音期间仅字幕。"
                     if self.source_box.currentIndex() == 1
@@ -617,7 +623,7 @@ class Window(QMainWindow):
                 + (
                     " 本次任务已回退本地，不再上传；再次开始任务才尝试联网。"
                     if self.network_mode == "fallback"
-                    else " 已开启联网增强，会上传近期音频和待翻译文字；失败后本次任务转为本地处理。"
+                    else " 联网增强：pro 上传近期音频与待翻译文字；flash 仅上传待翻译文字。"
                 )
             )
         self._buttons()
@@ -699,11 +705,12 @@ class Window(QMainWindow):
         self.stop_button.setEnabled(bool(self.pending or self.listening or self.player.busy))
         for box in (self.direction_box, self.source_box, self.swap_button, self.profile_box):
             box.setEnabled(idle and not self.listening)
-        self.profile_box.setEnabled(idle and not self.listening and not self.cloud_enabled)
+        self.profile_box.setEnabled(idle and not self.listening)
         self.cloud_button.setEnabled(idle and not self.listening)
+        self.settings_button.setEnabled(idle and not self.listening)
         for button in (self.translate_button, self.file_button):
             button.setEnabled(self.ready and idle and not self.listening)
-        self.file_button.setText("打开歌曲" if self.profile_box.currentIndex() == 1 else "打开音频")
+        self.file_button.setText("打开音频")
         self.auto_box.setEnabled(not (self.listening and self.source_box.currentIndex() == 1))
         self.replay_button.setEnabled(
             self.ready
@@ -894,13 +901,14 @@ class Window(QMainWindow):
                 source,
                 autoplay=auto and self.source_box.currentIndex() == 0,
                 number_mode=mode,
+                cloud=self.cloud_config if self.cloud_enabled else None,
             )
         self.pending += 1
         self.jobs.put_nowait((epoch, 0, self.song_session))
         self.status(
-            "正在启动实时字幕…"
-            if isinstance(self.song_session, LiveSession)
-            else "正在准备段落修订…"
+            "正在准备 pro 段落复核…"
+            if isinstance(self.song_session, SongSession)
+            else "正在启动 flash 实时字幕…"
         )
         self._buttons()
 
@@ -931,9 +939,9 @@ class Window(QMainWindow):
             )
         self.microphone.start()
         self.status(
-            "实时字幕已开始，原文随说话更新，译文随后显示…"
-            if isinstance(session, LiveSession)
-            else "段落修订已开始，正在等待第一段人声…"
+            "pro 段落修订已开始，正在等待第一段人声…"
+            if isinstance(session, SongSession)
+            else "flash 已开始：原文随说话更新，译文随后显示…"
         )
 
     def _song_key(self, block):
@@ -956,7 +964,8 @@ class Window(QMainWindow):
             self.microphone.stop()
             self.microphone = None
         if self.song_session is not None:
-            self.song_session.mailbox.finish()
+            if isinstance(self.song_session, (SongSession, LiveSession)):
+                self.song_session.mailbox.finish()
             self.song_session = None
         self.player.stop()
         while True:
@@ -997,10 +1006,10 @@ class Window(QMainWindow):
                     emit("ready", True)
                 elif isinstance(payload, (SongSession, LiveSession)):
                     payload.run(self.engine, self.player, self.cancel, emit)
-                elif self.cloud_enabled and payload.kind == "text":
-                    from .enhanced_inference import process_text
+                elif self.cloud_enabled and payload.kind in {"text", "file"}:
+                    from .enhanced_inference import process_short_request
 
-                    process_text(
+                    process_short_request(
                         payload, self.cloud_config, self.engine, self.player, self.cancel, emit
                     )
                     emit("done", True)
@@ -1256,7 +1265,10 @@ class Window(QMainWindow):
         if not self.model.items:
             return
         path, _ = QFileDialog.getSaveFileName(
-            self, "导出本次字幕", "粤普随译-字幕.txt", "文本文件 (*.txt)"
+            self,
+            "导出本次字幕",
+            str(export_directory(self.defaults) / "粤普随译-字幕.txt"),
+            "文本文件 (*.txt)",
         )
         if path:
             try:
@@ -1288,46 +1300,31 @@ class Window(QMainWindow):
             self.view.follow_tail = True
             self.position_changed()
 
+    def apply_preferences(self):
+        self.profile_box.setCurrentIndex(1 if self.defaults.mode == "pro" else 0)
+        self.direction_box.setCurrentIndex(0 if self.defaults.direction == "yue" else 1)
+        self.source_box.setCurrentIndex(0 if self.defaults.audio_source == "microphone" else 1)
+        self.auto_box.setChecked(self.defaults.autoplay)
+        self.delegate.font_size = self.defaults.font_size
+        self.delegate.cache.clear()
+        self.delegate.heights.clear()
+        self.view.smooth = self.defaults.smooth
+        if not self.view.smooth:
+            self.view.animation.stop()
+        self.number_mode = self.defaults.number_mode
+        self.song_file_vocals = self.defaults.vocals
+        self.view.doItemsLayout()
+        self.view.viewport().update()
+        self.source_changed()
+
     def settings(self):
-        dialog = QDialog(self)
-        dialog.setWindowTitle("阅读与播报")
-        form = QFormLayout(dialog)
-        form.setContentsMargins(24, 24, 24, 24)
-        font = QSpinBox()
-        font.setRange(12, 24)
-        font.setValue(self.delegate.font_size)
-        form.addRow("字幕字号", font)
-        smooth = QCheckBox("平滑滚动与字幕跟随动画")
-        smooth.setChecked(self.view.smooth)
-        form.addRow(smooth)
-        numbers = QComboBox()
-        numbers.addItems(["按原文", "金额", "号码逐位"])
-        numbers.setCurrentIndex(["original", "amount", "identifier"].index(self.number_mode))
-        form.addRow("普通话数字读法", numbers)
-        vocals = QCheckBox("人声分离（较慢，仅处理歌曲文件）")
-        vocals.setChecked(self.song_file_vocals)
-        vocals.setEnabled(not self.pending and not self.listening)
-        form.addRow("高质量选项", vocals)
-        note = QLabel(
-            "字幕仅保存在本次会话内，关闭软件后释放。\n上限 10,000 条 / 原文译文合计 200 万字符。\n数字读音仍需核对；系统收音期间仅显示字幕。"
-        )
-        note.setObjectName("muted")
-        form.addRow(note)
-        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
-        buttons.accepted.connect(dialog.accept)
-        buttons.rejected.connect(dialog.reject)
-        form.addRow(buttons)
+        if self.pending or self.listening or self.closing:
+            return
+        dialog = SettingsDialog(self.defaults, self.preferences, self)
         if dialog.exec() == QDialog.Accepted:
-            self.delegate.font_size = font.value()
-            self.delegate.cache.clear()
-            self.delegate.heights.clear()
-            self.view.smooth = smooth.isChecked()
-            if not self.view.smooth:
-                self.view.animation.stop()
-            self.number_mode = ["original", "amount", "identifier"][numbers.currentIndex()]
-            self.song_file_vocals = vocals.isChecked()
-            self.view.doItemsLayout()
-            self.view.viewport().update()
+            self.defaults = dialog.preferences
+            self.apply_preferences()
+            self.status("首选项已保存，已应用默认模式、阅读与文件位置设置。")
 
     def cloud_settings(self):
         if self.pending or self.listening or self.closing:
@@ -1340,8 +1337,6 @@ class Window(QMainWindow):
                 dialog.remember,
             )
             self.network_mode = "cloud_pending" if self.cloud_enabled else "offline"
-            if self.cloud_enabled:
-                self.profile_box.setCurrentIndex(1)
             self.network_pill.setText("联网待请求" if self.cloud_enabled else "本地离线")
             self.network_pill.setToolTip(
                 "音频与文字仅在启用后开始处理时发送至所选百炼地域；每次启动默认离线。"
@@ -1350,7 +1345,7 @@ class Window(QMainWindow):
             )
             self.source_changed()
             self.status(
-                "联网增强已开启；开始处理时发送近期音频和待翻译文字，失败后回退本地。仍需准备本地段落修订模型。"
+                "联网增强已开启；pro 上传近期音频与待翻译文字，flash 上传待翻译文字。失败后本次任务回退本地。"
                 if self.cloud_enabled
                 else "联网增强已关闭，后续处理仅使用本地模型。"
             )

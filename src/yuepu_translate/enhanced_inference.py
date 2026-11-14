@@ -7,6 +7,7 @@ from .cloud_protocol import CloudError
 from .inference_control import check_cancel
 from .languages import UNSUPPORTED_SCRIPT
 from .paragraphs import accept_punctuation
+from .translation_state import IncrementalTranslation
 
 
 class SessionInference:
@@ -83,8 +84,8 @@ class SessionInference:
             inference.close()
 
 
-def process_text(request, config, engine, player, cancel, emit):
-    """Text entry shares the same one-failure latch and stays within one UI job."""
+def process_short_request(request, config, engine, player, cancel, emit):
+    """Text and flash files share opt-in translation and the one-failure latch."""
     import time
 
     from .desktop_engine import Cancelled
@@ -94,14 +95,32 @@ def process_text(request, config, engine, player, cancel, emit):
     try:
         emit("status", "正在准备联网翻译与本地回退…")
         inference.start(cancel)
-        emit("source", request.text)
+        text = request.text
+        recognition_seconds = 0
+        if request.kind == "file":
+            import soundfile as sf
+
+            start = time.perf_counter()
+            info = sf.info(request.path)
+            if (
+                not 0 < info.duration <= 15
+                or info.channels not in {1, 2}
+                or not 8000 <= info.samplerate <= 192000
+            ):
+                raise ValueError("flash 文件仅支持不超过 15 秒的单声道或双声道音频。")
+            samples, rate = sf.read(request.path, frames=info.samplerate * 15 + 1, dtype="float32")
+            text = engine.recognize(samples, rate, cancel, request.source, emit)
+            recognition_seconds = time.perf_counter() - start
+        emit("source", text)
         start = time.perf_counter()
-        translated = inference.translate(request.text, cancel)
+        translated = IncrementalTranslation().update(
+            text, "", lambda part: inference.translate(part, cancel)
+        )
         emit(
             "translation",
             dict(
                 text=translated,
-                recognition_seconds=0,
+                recognition_seconds=recognition_seconds,
                 translation_seconds=time.perf_counter() - start,
             ),
         )

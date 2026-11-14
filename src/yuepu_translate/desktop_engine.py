@@ -27,6 +27,7 @@ from .capture_process import CaptureProcess
 from .languages import ASR_LANGUAGES, UNSUPPORTED_SCRIPT
 from .numbers import spoken_numbers
 from .paths import DATA_DIR
+from .preferences import cache_directory
 
 ROOT = DATA_DIR
 # The native 4s setting is a soft VAD heuristic, not a hard cut. Keep its
@@ -169,6 +170,7 @@ class Engine:
         if any(not (ROOT / p).is_file() for p in required):
             raise RuntimeError("离线模型文件不完整，请先完成模型准备。")
         self.check(cancel)
+        cache_directory()
         status("正在加载语音识别…")
         if self.asr is None:
             self.asr = model_runtime.recognizer()
@@ -257,7 +259,7 @@ class Engine:
         user = f"将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
         prompt = f"<｜hy_begin▁of▁sentence｜><｜hy_User｜>{user}<｜hy_Assistant｜>"
         # Per-job text files are removed on success, cancellation and error.
-        with tempfile.TemporaryDirectory(prefix="yuepu-") as directory:
+        with tempfile.TemporaryDirectory(prefix="yuepu-", dir=cache_directory()) as directory:
             path = Path(directory) / "prompt.txt"
             path.write_text(prompt, encoding="utf-8")
             command = [

@@ -16,6 +16,7 @@ models/
 runtime/
 downloads/
 outputs/
+/YuePuTranslate/cache/
 *.onnx
 *.gguf
 *.wav
