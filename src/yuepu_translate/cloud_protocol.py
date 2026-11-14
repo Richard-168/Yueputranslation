@@ -72,7 +72,22 @@ def payload(operation, source, content):
             model=MT_MODEL,
             messages=[dict(role="user", content=content)],
             translation_options=dict(
-                source_lang="auto", target_lang="Chinese" if source == "yue" else "Cantonese"
+                # Written Cantonese shares Chinese characters with Mandarin;
+                # auto detection can treat this as Chinese-to-Chinese copying.
+                source_lang="Cantonese" if source == "yue" else "Chinese",
+                target_lang="Chinese" if source == "yue" else "Cantonese",
+                domains=(
+                    "This is a transcript of spoken Cantonese, possibly mixed with English. "
+                    "Translate the full meaning into natural Mandarin in simplified Chinese. "
+                    "Render Cantonese vocabulary, grammar and idioms as Mandarin expressions, "
+                    "rather than merely replacing characters. Preserve names, numbers, tone "
+                    "and negation; do not invent missing information."
+                    if source == "yue"
+                    else "This is a transcript of spoken Mandarin, possibly mixed with English. "
+                    "Translate the full meaning into natural colloquial Cantonese, using "
+                    "Cantonese vocabulary and grammar. Preserve names, numbers, tone and "
+                    "negation; do not invent missing information."
+                ),
             ),
             stream=False,
             max_tokens=512,

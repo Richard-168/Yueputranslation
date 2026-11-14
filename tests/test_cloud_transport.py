@@ -91,9 +91,19 @@ class CloudTransportTests(unittest.TestCase):
         self.assertEqual(self.client.transcribe(np.zeros(8000, np.float32), cancel), "测试原文")
         self.assertEqual(self.client.translate("待翻译文字2038", cancel), "测试译文")
         self.assertEqual(self.calls[0]["asr_options"]["language"], "yue")
+        self.assertEqual(self.calls[1]["translation_options"]["source_lang"], "Cantonese")
         self.assertEqual(self.calls[1]["translation_options"]["target_lang"], "Chinese")
         self.assertEqual(self.client.requests, 2)
         self.assertIsNotNone(self.client.child.poll())
+
+    def test_reverse_direction_reaches_http_with_explicit_source_language(self):
+        self.client.source = "zh"
+        text = "你们不要昧着良心说话，test 2038。"
+        self.assertEqual(self.client.translate(text, threading.Event()), "测试译文")
+        options = self.calls[0]["translation_options"]
+        self.assertEqual(options["source_lang"], "Chinese")
+        self.assertEqual(options["target_lang"], "Cantonese")
+        self.assertEqual(self.calls[0]["messages"], [dict(role="user", content=text)])
 
     def test_actual_http_401_429_and_bad_json_are_not_retried(self):
         for status, invalid, code in [

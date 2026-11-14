@@ -30,13 +30,15 @@ class CloudProtocolTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             CloudConfig("key\nAuthorization: leak").validate()
 
-    def test_both_translation_directions_include_english_input_without_chat_prompt(self):
-        for source, target in [("zh", "Cantonese"), ("yue", "Chinese")]:
-            body = payload("translation", source, "test 2038，不是2308")
-            self.assertEqual(
-                body["translation_options"], dict(source_lang="auto", target_lang=target)
-            )
-            self.assertEqual(body["messages"], [dict(role="user", content="test 2038，不是2308")])
+    def test_translation_uses_selected_dialect_and_preserves_mixed_input(self):
+        for source, language, target, text in [
+            ("zh", "Chinese", "Cantonese", "test 2038，不是2308，你们不要昧着良心说话。"),
+            ("yue", "Cantonese", "Chinese", "test 2038，唔系2308，你哋唔好撑住个心口讲。"),
+        ]:
+            body = payload("translation", source, text)
+            self.assertEqual(body["translation_options"]["source_lang"], language)
+            self.assertEqual(body["translation_options"]["target_lang"], target)
+            self.assertEqual(body["messages"], [dict(role="user", content=text)])
         for text in ["", "x" * 241]:
             with self.assertRaises(ValueError):
                 payload("translation", "yue", text)
