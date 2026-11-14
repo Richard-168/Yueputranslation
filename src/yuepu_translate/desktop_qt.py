@@ -13,6 +13,7 @@ from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
     QPropertyAnimation,
+    QSettings,
     QSize,
     Qt,
     QTimer,
@@ -45,6 +46,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QStyledItemDelegate,
     QVBoxLayout,
@@ -54,6 +56,7 @@ from PySide6.QtWidgets import (
 from .cloud_config import CloudConfig, load_settings
 from .cloud_dialog import CloudDialog
 from .desktop_engine import AudioPlayer, Cancelled, Engine, Microphone, Request, SystemAudio
+from .desktop_theme import STYLE, THEMES, TerminalEmpty, palette, stylesheet
 from .inference_control import InferenceCancelled
 from .live_session import LiveSession, make_live_stream
 from .paths import DATA_DIR
@@ -62,50 +65,6 @@ from .transcript_model import TranscriptEntry, TranscriptModel
 
 ROOT = DATA_DIR
 NAMES = {"zh": "普通话", "yue": "粤语", "en": "英文"}
-STYLE = """
-QWidget { background:#10151e; color:#e8edf5; font-family:'Microsoft YaHei UI'; font-size:14px; }
-QMainWindow { background:#10151e; }
-QFrame#header { background:#141b26; border-bottom:1px solid #283244; }
-QFrame#workarea { background:#171f2c; border:1px solid #2a3547; border-radius:12px; }
-QFrame#languages { background:#1a2332; border-bottom:1px solid #2a3547; border-top-left-radius:12px; border-top-right-radius:12px; }
-QLabel { background:transparent; }
-QLabel#brand { font-size:22px; font-weight:700; letter-spacing:1px; }
-QLabel#muted { color:#8e9db4; font-size:12px; }
-QLabel#pill { color:#8fbcff; background:#1a2c46; border-radius:13px; padding:5px 12px; font-size:12px; }
-QLabel#section { color:#8293ad; font-size:12px; }
-QPushButton { border:1px solid #344156; border-radius:7px; padding:9px 15px; background:#1e293a; }
-QPushButton:hover { background:#29374d; border-color:#506485; }
-QPushButton:pressed { background:#172133; }
-QPushButton:focus { border:1px solid #75a4ff; }
-QPushButton:disabled { color:#637086; background:#17202d; border-color:#273246; }
-QPushButton#primary { background:#316dff; border:1px solid #316dff; color:white; font-weight:600; }
-QPushButton#primary:hover { background:#477eff; }
-QPushButton#primary:disabled { background:#233c66; border-color:#233c66; color:#7e99c0; }
-QPushButton#quiet { background:transparent; border-color:transparent; color:#a9b7cb; }
-QPushButton#quiet:hover { background:#222e40; color:#eef4ff; }
-QPushButton#tab { background:transparent; border:0; border-bottom:2px solid transparent; border-radius:0; color:#9aabc3; padding:14px 17px; }
-QPushButton#tab:checked { color:#90b6ff; border-bottom:2px solid #4e89ff; }
-QComboBox { background:#1b2636; border:1px solid #344156; border-radius:6px; padding:7px 12px; min-height:22px; }
-QComboBox:disabled { color:#6b7b93; }
-QComboBox::drop-down { border:0; width:25px; }
-QComboBox QAbstractItemView { background:#202c3d; selection-background-color:#315894; padding:5px; }
-QCheckBox { spacing:8px; background:transparent; }
-QCheckBox:disabled { color:#6d7c91; }
-QCheckBox::indicator { width:16px; height:16px; border:1px solid #52627b; border-radius:4px; background:#192333; }
-QCheckBox::indicator:checked { background:#387cff; border-color:#75a5ff; }
-QPlainTextEdit { background:#171f2c; border:1px solid #344156; border-radius:8px; padding:10px; selection-background-color:#285ca8; }
-QPlainTextEdit:focus { border-color:#669aff; }
-QListView { background:#171f2c; border:0; outline:0; }
-QScrollBar:vertical { background:#17202c; width:10px; margin:4px 1px; }
-QScrollBar::handle:vertical { background:#465975; border-radius:4px; min-height:35px; }
-QScrollBar::handle:vertical:hover { background:#6480a7; }
-QScrollBar::add-line:vertical,QScrollBar::sub-line:vertical { height:0; }
-QMenu { background:#1d293b; border:1px solid #3b4a61; padding:6px; }
-QMenu::item { padding:9px 25px; border-radius:4px; }
-QMenu::item:selected { background:#304b73; }
-QSpinBox { background:#1d293b; padding:7px; border:1px solid #42526c; border-radius:5px; }
-QToolTip { background:#25344b; color:white; border:1px solid #526a90; padding:6px; }
-"""
 
 
 class PairDelegate(QStyledItemDelegate):
@@ -115,6 +74,7 @@ class PairDelegate(QStyledItemDelegate):
         super().__init__(view)
         self.view = view
         self.font_size = 15
+        self.colors = THEMES["dark"]
         self.cache = OrderedDict()
         self.heights = OrderedDict()
 
@@ -136,8 +96,8 @@ class PairDelegate(QStyledItemDelegate):
             doc.setDefaultTextOption(option)
             cursor = QTextCursor(doc)
             fixed, draft = QTextCharFormat(), QTextCharFormat()
-            fixed.setForeground(QColor("#edf3fd"))
-            draft.setForeground(QColor("#9daec5"))
+            fixed.setForeground(QColor(self.colors["text"]))
+            draft.setForeground(QColor(self.colors["draft"]))
             cursor.insertText(text[:confirmed], fixed)
             cursor.insertText(text[confirmed:], draft)
             doc.setTextWidth(max(80, (width // 2) - 58))
@@ -170,23 +130,25 @@ class PairDelegate(QStyledItemDelegate):
         painter.save()
         painter.setClipRect(rect)
         selected = self.view.selectionModel().isSelected(index)
-        painter.fillRect(rect, QColor("#21334c" if selected else "#171f2c"))
+        painter.fillRect(
+            rect, QColor(self.colors["selected"] if selected else self.colors["paper"])
+        )
         middle = rect.left() + rect.width() // 2
         if not selected:
             painter.fillRect(
-                middle, rect.top(), rect.width() // 2, rect.height(), QColor("#192230")
+                middle, rect.top(), rect.width() // 2, rect.height(), QColor(self.colors["target"])
             )
-        painter.setPen(QColor("#2a3547"))
+        painter.setPen(QColor(self.colors["border"]))
         painter.drawLine(middle, rect.top(), middle, rect.bottom())
         painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
         painter.setFont(QFont("Microsoft YaHei UI", 9))
-        painter.setPen(QColor("#8193ad"))
+        painter.setPen(QColor(self.colors["muted"]))
         painter.drawText(
             rect.left() + 26,
             rect.top() + 25,
             f"{entry.timestamp}   ·   {NAMES.get(entry.source_language, entry.source_language)}",
         )
-        painter.setPen(QColor("#88a9cb"))
+        painter.setPen(QColor(self.colors["muted"]))
         painter.drawText(
             middle + 26,
             rect.top() + 25,
@@ -198,7 +160,7 @@ class PairDelegate(QStyledItemDelegate):
             context = doc.documentLayout().PaintContext()
             context.palette.setColor(
                 context.palette.ColorRole.Text,
-                QColor("#edf3fd" if is_target and entry.target else "#bbc9dc"),
+                QColor(self.colors["text"] if is_target and entry.target else self.colors["draft"]),
             )
             doc.documentLayout().draw(painter, context)
             painter.restore()
@@ -306,7 +268,11 @@ class SmoothTranscriptView(QListView):
 class Window(QMainWindow):
     def __init__(self, muted=False):
         super().__init__()
-        self.setWindowTitle("粤普随译")
+        self.preferences = QSettings(
+            QSettings.IniFormat, QSettings.UserScope, "YuePuTranslate", "Desktop"
+        )
+        self.theme = "dark"
+        self.setWindowTitle("粤普随译 · YUEPU TERMINAL")
         self.resize(1240, 850)
         self.setMinimumSize(960, 700)
         self.events = queue.Queue()
@@ -338,6 +304,7 @@ class Window(QMainWindow):
         self.active_ids = set()
         self.unread = 0
         self._build()
+        self.apply_theme(self.preferences.value("appearance", "dark"), persist=False)
         self.source_changed()
         self.worker = threading.Thread(target=self._worker, daemon=True)
         self.worker.start()
@@ -362,6 +329,7 @@ class Window(QMainWindow):
 
     def _build(self):
         host = QWidget()
+        host.setObjectName("host")
         root = QVBoxLayout(host)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
@@ -369,55 +337,136 @@ class Window(QMainWindow):
         header = QFrame()
         header.setObjectName("header")
         top = QHBoxLayout(header)
-        top.setContentsMargins(28, 13, 24, 13)
+        top.setContentsMargins(22, 12, 22, 12)
+        top.setSpacing(12)
+        mark = QLabel("YP / ")
+        mark.setObjectName("brandMark")
+        top.addWidget(mark)
+        branding = QVBoxLayout()
+        branding.setSpacing(2)
         brand = QLabel("粤普随译")
         brand.setObjectName("brand")
-        top.addWidget(brand)
-        top.addSpacing(28)
-        self.live_tab = self.button("实时字幕", lambda: self.show_composer(False), "tab")
-        self.text_tab = self.button("文字输入", lambda: self.show_composer(True), "tab")
-        for tab in (self.live_tab, self.text_tab):
-            tab.setCheckable(True)
-            top.addWidget(tab)
-        self.live_tab.setChecked(True)
+        branding.addWidget(brand)
+        branding.addWidget(self.label("YUEPU  /  INTERPRETATION TERMINAL", "eyebrow"))
+        top.addLayout(branding)
         top.addStretch()
-        self.network_pill = QLabel("本地离线")
-        self.network_pill.setObjectName("pill")
-        top.addWidget(self.network_pill)
-        top.addSpacing(10)
-        self.export_button = self.button("导出记录", self.export_records, "quiet")
-        top.addWidget(self.export_button)
+        self.dark_button = self.button("深色", lambda: self.apply_theme("dark"), "theme")
+        self.light_button = self.button("浅色", lambda: self.apply_theme("light"), "theme")
+        self.dark_button.setProperty("appearance", "dark")
+        self.light_button.setProperty("appearance", "light")
+        self.dark_button.setAccessibleName("切换深色主题")
+        self.light_button.setAccessibleName("切换浅色主题")
+        for button in (self.dark_button, self.light_button):
+            button.setCheckable(True)
+            top.addWidget(button)
+        top.addSpacing(8)
         self.cloud_button = self.button("联网设置", self.cloud_settings, "quiet")
         top.addWidget(self.cloud_button)
         top.addWidget(self.button("设置", self.settings, "quiet"))
         root.addWidget(header)
+
         content = QWidget()
-        body = QVBoxLayout(content)
-        body.setContentsMargins(28, 23, 28, 18)
-        body.setSpacing(16)
-        controls = QHBoxLayout()
-        controls.setSpacing(12)
-        controls.addWidget(QLabel("声音来源"))
+        shell = QHBoxLayout(content)
+        shell.setContentsMargins(22, 20, 22, 20)
+        shell.setSpacing(22)
+        self.sidebar = QFrame()
+        self.sidebar.setObjectName("sidebar")
+        self.sidebar.setFixedWidth(238)
+        sidebar_layout = QVBoxLayout(self.sidebar)
+        sidebar_layout.setContentsMargins(18, 20, 18, 18)
+        sidebar_layout.setSpacing(10)
+        control_scroll = QScrollArea()
+        control_scroll.setObjectName("controlScroll")
+        control_scroll.setWidgetResizable(True)
+        control_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        control_scroll.setFrameShape(QFrame.NoFrame)
+        control_fields = QWidget()
+        control_fields.setObjectName("controlFields")
+        controls = QVBoxLayout(control_fields)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(10)
+        controls.addWidget(self.label("CONTROL / 控制台", "eyebrow"))
+        controls.addWidget(self.label("会话控制", "panelTitle"))
+        controls.addSpacing(12)
+        controls.addWidget(self.label("01 / 输入通道", "section"))
         self.source_box = QComboBox()
         self.source_box.addItems(["麦克风", "设备播放声音"])
-        self.source_box.setMinimumWidth(180)
+        self.source_box.setAccessibleName("声音来源")
         self.source_box.currentTextChanged.connect(self.source_changed)
         controls.addWidget(self.source_box)
+        controls.addSpacing(8)
+        direction_heading = QHBoxLayout()
+        direction_heading.addWidget(self.label("02 / 翻译方向", "section"))
+        direction_heading.addStretch()
+        self.swap_button = self.button("交换方向", self.swap, "swap")
+        self.swap_button.setAccessibleName("交换翻译方向")
+        self.swap_button.setToolTip("交换粤语与普通话的翻译方向")
+        direction_heading.addWidget(self.swap_button)
+        controls.addLayout(direction_heading)
+        self.direction_box = QComboBox()
+        self.direction_box.addItems(["粤语 → 普通话", "普通话 → 粤语"])
+        self.direction_box.setAccessibleName("翻译方向")
+        self.direction_box.currentIndexChanged.connect(self.direction_changed)
+        controls.addWidget(self.direction_box)
+        controls.addSpacing(8)
+        controls.addWidget(self.label("03 / 识别与播报", "section"))
+        self.profile_box = QComboBox()
+        self.profile_box.addItems(["会话（实时字幕）", "段落修订（实验）"])
+        self.profile_box.setAccessibleName("识别模式")
+        self.profile_box.setToolTip(
+            "会话：边说边显示原文，翻译随后更新。\n段落修订：使用较大的模型复核整段，等待较长。"
+        )
+        self.profile_box.currentIndexChanged.connect(self.source_changed)
+        controls.addWidget(self.profile_box)
         self.auto_box = QCheckBox("自动播报译音")
         self.auto_box.setChecked(True)
         controls.addWidget(self.auto_box)
         controls.addStretch()
-        self.load_button = self.button("加载离线模型", self.load)
-        self.record_button = self.button("开始收音", self.toggle_capture, "primary")
-        self.stop_button = self.button("停止", self.stop)
-        controls.addWidget(self.load_button)
-        controls.addWidget(self.record_button)
-        controls.addWidget(self.stop_button)
-        body.addLayout(controls)
-        self.mode_hint = QLabel("麦克风用于面对面交流。字幕按句保留，停止后仍可回看。")
-        self.mode_hint.setObjectName("muted")
+        self.mode_hint = self.label("", "muted")
         self.mode_hint.setWordWrap(True)
-        body.addWidget(self.mode_hint)
+        controls.addWidget(self.mode_hint)
+        control_scroll.setWidget(control_fields)
+        sidebar_layout.addWidget(control_scroll, 1)
+        sidebar_layout.addSpacing(8)
+        self.network_pill = self.label("本地离线", "pill")
+        self.network_pill.setToolTip("默认仅使用本地模型；联网增强需手动开启。")
+        sidebar_layout.addWidget(self.network_pill)
+        self.load_button = self.button("加载离线模型", self.load, "primary")
+        sidebar_layout.addWidget(self.load_button)
+        self.record_button = self.button("开始收音", self.toggle_capture, "primary")
+        sidebar_layout.addWidget(self.record_button)
+        self.stop_button = self.button("停止任务    Esc", self.stop)
+        sidebar_layout.addWidget(self.stop_button)
+        shell.addWidget(self.sidebar)
+
+        body = QVBoxLayout()
+        body.setSpacing(16)
+        heading = QHBoxLayout()
+        title = QVBoxLayout()
+        title.setSpacing(4)
+        title.addWidget(self.label("实时同传", "title"))
+        title.addWidget(self.label("LIVE INTERPRETATION  /  双语会话工作区", "eyebrow"))
+        heading.addLayout(title)
+        heading.addStretch()
+        self.count_label = self.label("0 条字幕", "count")
+        heading.addWidget(self.count_label, 0, Qt.AlignTop)
+        body.addLayout(heading)
+
+        tabs = QHBoxLayout()
+        tabs.setSpacing(0)
+        self.live_tab = self.button("实时字幕", lambda: self.show_composer(False), "tab")
+        self.text_tab = self.button("文字输入", lambda: self.show_composer(True), "tab")
+        for tab in (self.live_tab, self.text_tab):
+            tab.setCheckable(True)
+            tabs.addWidget(tab)
+        self.live_tab.setChecked(True)
+        tabs.addStretch()
+        self.file_button = self.button("导入音频", self.open_audio, "quiet")
+        tabs.addWidget(self.file_button)
+        self.replay_button = self.button("播报选中句", self.replay, "quiet")
+        self.replay_button.setToolTip("播报选中的译文；未选中时播报最后一句")
+        tabs.addWidget(self.replay_button)
+        body.addLayout(tabs)
         work = QFrame()
         work.setObjectName("workarea")
         area = QVBoxLayout(work)
@@ -426,37 +475,15 @@ class Window(QMainWindow):
         language_bar = QFrame()
         language_bar.setObjectName("languages")
         languages = QHBoxLayout(language_bar)
-        languages.setContentsMargins(23, 15, 23, 15)
-        self.direction_box = QComboBox()
-        self.direction_box.addItems(["粤语 → 普通话", "普通话 → 粤语"])
-        self.direction_box.currentIndexChanged.connect(self.direction_changed)
-        languages.addWidget(self.direction_box)
-        languages.addStretch()
-        self.swap_button = self.button("交换方向", self.swap, "quiet")
-        languages.addWidget(self.swap_button)
-        languages.addStretch()
-        self.count_label = QLabel("0 条字幕")
-        languages.addWidget(QLabel("识别模式"))
-        self.profile_box = QComboBox()
-        self.profile_box.addItems(["会话（实时字幕）", "段落修订（实验）"])
-        self.profile_box.setAccessibleName("识别模式")
-        self.profile_box.setToolTip(
-            "会话：边说边显示原文，翻译随后更新。\n段落修订：使用较大的模型复核整段，等待较长。"
-        )
-        self.profile_box.currentIndexChanged.connect(self.source_changed)
-        languages.addWidget(self.profile_box)
-        languages.addStretch()
-        self.count_label.setObjectName("muted")
-        languages.addWidget(self.count_label)
-        area.addWidget(language_bar)
-        columns = QHBoxLayout()
-        columns.setContentsMargins(26, 12, 26, 12)
+        languages.setContentsMargins(26, 16, 26, 16)
+        languages.setSpacing(0)
         self.source_header = QLabel("原文 / 粤语")
         self.target_header = QLabel("译文 / 普通话")
         for label in (self.source_header, self.target_header):
-            label.setObjectName("section")
-            columns.addWidget(label, 1)
-        area.addLayout(columns)
+            label.setObjectName("panelTitle")
+            languages.addWidget(label, 1)
+        self.target_header.setContentsMargins(26, 0, 0, 0)
+        area.addWidget(language_bar)
         self.view = SmoothTranscriptView()
         self.view.setModel(self.model)
         self.delegate = PairDelegate(self.view)
@@ -464,18 +491,12 @@ class Window(QMainWindow):
         self.view.setAccessibleName("按时间排列的原文与译文字幕，左右对应，可滚动回看")
         self.view.position_changed.connect(self.position_changed)
         area.addWidget(self.view, 1)
-        self.empty = QLabel(
-            "双语字幕将在这里显示\n\n选择音源并加载模型后，点击开始。\n原文在左，译文在右，可以随时滚动回看。",
-            self.view.viewport(),
-        )
-        self.empty.setAlignment(Qt.AlignCenter)
-        self.empty.setStyleSheet(
-            "color:#8193af; font-size:17px; line-height:1.7; background:transparent;"
-        )
-        self.empty.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self.empty = TerminalEmpty(self.view.viewport())
         foot = QHBoxLayout()
         foot.setContentsMargins(18, 10, 18, 11)
-        self.cache_label = QLabel("本次会话保留 · 最多 10,000 条 / 200 万字符")
+        self.cache_label = QLabel("仅本次会话 · 退出前请导出")
+        self.cache_label.setWordWrap(True)
+        self.cache_label.setToolTip("最多保留 10,000 条 / 原文译文合计 200 万字符")
         self.cache_label.setObjectName("muted")
         foot.addWidget(self.cache_label, 1)
         self.latest_button = self.button("回到最新 ↓", self.go_latest, "quiet")
@@ -486,6 +507,8 @@ class Window(QMainWindow):
         self.clear_button = self.button("清空", self.clear_records, "quiet")
         foot.addWidget(self.copy_button)
         foot.addWidget(self.clear_button)
+        self.export_button = self.button("导出记录  ↗", self.export_records)
+        foot.addWidget(self.export_button)
         area.addLayout(foot)
         body.addWidget(work, 1)
         self.composer = QWidget()
@@ -500,23 +523,46 @@ class Window(QMainWindow):
         compose.addWidget(self.translate_button)
         body.addWidget(self.composer)
         self.composer.hide()
-        bottom = QHBoxLayout()
+        shell.addLayout(body, 1)
+        root.addWidget(content, 1)
+        statusbar = QFrame()
+        statusbar.setObjectName("statusbar")
+        bottom = QHBoxLayout(statusbar)
+        bottom.setContentsMargins(22, 9, 22, 9)
+        bottom.setSpacing(16)
+        self.state_label = self.label("待机 / STANDBY", "state")
+        bottom.addWidget(self.state_label)
         self.status_label = QLabel("先加载离线模型，再开始交流。")
         self.status_label.setWordWrap(True)
         self.status_label.setObjectName("muted")
         bottom.addWidget(self.status_label, 1)
-        self.file_button = self.button("打开音频", self.open_audio, "quiet")
-        self.replay_button = self.button("播报选中句", self.replay, "quiet")
-        self.replay_button.setToolTip("播报选中的译文；未选中时播报最后一句")
-        bottom.addWidget(self.file_button)
-        bottom.addWidget(self.replay_button)
-        body.addLayout(bottom)
-        root.addWidget(content, 1)
+        bottom.addWidget(self.label("Ctrl + Enter  翻译   /   Esc  停止", "muted"))
+        root.addWidget(statusbar)
         self.number_mode = "original"
         self.model.rowsInserted.connect(self._model_changed)
         self.model.rowsRemoved.connect(self._model_changed)
         self.model.modelReset.connect(self._model_changed)
         self.view.selectionModel().selectionChanged.connect(lambda: self._buttons())
+
+    @staticmethod
+    def label(text, kind):
+        label = QLabel(text)
+        label.setObjectName(kind)
+        return label
+
+    def apply_theme(self, theme, *, persist=True):
+        self.theme = theme if isinstance(theme, str) and theme in THEMES else "dark"
+        app = QApplication.instance()
+        app.setPalette(palette(self.theme))
+        app.setStyleSheet(stylesheet(self.theme))
+        self.dark_button.setChecked(self.theme == "dark")
+        self.light_button.setChecked(self.theme == "light")
+        self.delegate.colors = THEMES[self.theme]
+        self.delegate.cache.clear()
+        self.empty.set_theme(self.theme)
+        self.view.viewport().update()
+        if persist:
+            self.preferences.setValue("appearance", self.theme)
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
@@ -536,7 +582,7 @@ class Window(QMainWindow):
                 f"已达缓存上限，最早 {self.model.evicted:,} 条已移出 · 请及时导出"
             )
         else:
-            self.cache_label.setText("本次会话保留 · 最多 10,000 条 / 200 万字符")
+            self.cache_label.setText("仅本次会话 · 退出前请导出")
         self._buttons()
 
     def source_language(self):
@@ -554,7 +600,7 @@ class Window(QMainWindow):
     def source_changed(self):
         if hasattr(self, "profile_box") and self.profile_box.currentIndex() == 1:
             self.mode_hint.setText(
-                "亮色前文已固定，浅色末尾可修订；只翻译新增内容，长讲话分段保留。"
+                "前文已固定，末尾仍可修订；只翻译新增内容，长讲话分段保留。"
                 + (
                     "设备收音期间仅字幕。"
                     if self.source_box.currentIndex() == 1
@@ -562,13 +608,9 @@ class Window(QMainWindow):
                 )
             )
         elif self.source_box.currentIndex() == 1:
-            self.mode_hint.setText(
-                "设备声音：原文随听随更新；亮色已固定，浅色暂定。收音期间仅字幕。"
-            )
+            self.mode_hint.setText("设备声音：原文随听随更新，末尾仍可修订。收音期间仅字幕。")
         else:
-            self.mode_hint.setText(
-                "边说边显示原文；亮色前文已固定，浅色末尾可修订。停顿后确认并播报。"
-            )
+            self.mode_hint.setText("边说边显示原文，末尾仍可修订。停顿后确认并播报。")
         if self.cloud_enabled:
             self.mode_hint.setText(
                 self.mode_hint.text()
@@ -584,12 +626,58 @@ class Window(QMainWindow):
         self.composer.setVisible(show)
         self.text_tab.setChecked(show)
         self.live_tab.setChecked(not show)
+        self._update_empty()
         if show:
             self.input.setFocus()
 
     def status(self, text, error=False):
         self.status_label.setText(text)
-        self.status_label.setStyleSheet("color:#f69b9b;" if error else "color:#91a4bf;")
+        for label in (self.status_label, self.state_label):
+            label.setProperty("severity", "error" if error else "normal")
+            label.style().unpolish(label)
+            label.style().polish(label)
+        self._update_state()
+
+    def _update_state(self):
+        if self.closing:
+            text = "退出 / CLOSING"
+        elif self.listening:
+            text = "收音中 / LIVE"
+        elif self.pending:
+            text = "处理中 / BUSY"
+        elif self.status_label.property("severity") == "error":
+            text = "异常 / ERROR"
+        elif self.ready:
+            text = "就绪 / READY"
+        else:
+            text = "待机 / STANDBY"
+        self.state_label.setText(text)
+
+    def _update_empty(self):
+        if self.text_tab.isChecked():
+            self.empty.title.setText("从一句话开始")
+            self.empty.subtitle.setText("在下方输入短句，原文与译文将在这里配对显示。")
+            self.empty.steps.setText(
+                "输入 1–120 字  /  Ctrl + Enter 翻译"
+                if self.ready
+                else "先加载左侧离线模型，再输入短句。"
+            )
+        elif self.listening:
+            self.empty.title.setText("正在聆听")
+            self.empty.subtitle.setText("等待有效语音，识别结果将在这里显示。")
+            self.empty.steps.setText("再次点击收音按钮确认末尾  /  Esc 取消任务")
+        elif self.pending:
+            self.empty.title.setText("正在准备会话")
+            self.empty.subtitle.setText("任务处理中，请稍候。")
+            self.empty.steps.setText("Esc 可停止当前任务")
+        else:
+            self.empty.title.setText("语音通道已就绪" if self.ready else "等待接入语音")
+            self.empty.subtitle.setText("让语言相通，让交流继续。")
+            self.empty.steps.setText(
+                "点击左侧「开始收音」，或导入音频。"
+                if self.ready
+                else "01  选择音源与方向  /  02  加载模型  /  03  开始收音"
+            )
 
     def _buttons(self):
         if not hasattr(self, "load_button"):
@@ -597,6 +685,7 @@ class Window(QMainWindow):
         idle = self.pending == 0 and not self.closing
         self.load_button.setEnabled(idle and not self.ready)
         self.load_button.setVisible(not self.ready)
+        self.record_button.setVisible(self.ready)
         self.record_button.setEnabled(
             not self.closing and (self.listening or (self.ready and idle))
         )
@@ -625,6 +714,8 @@ class Window(QMainWindow):
         self.clear_button.setEnabled(idle and not self.listening and bool(self.model.items))
         self.copy_button.setEnabled(bool(self.model.items))
         self.export_button.setEnabled(bool(self.model.items))
+        self._update_state()
+        self._update_empty()
 
     def load(self):
         if self.ready or self.pending or self.closing:
