@@ -8,6 +8,7 @@ build/
 dist/
 .ruff_cache/
 .pytest_cache/
+/tmp*/
 .coverage
 htmlcov/
 
@@ -40,7 +41,19 @@ outputs/
 *.key
 *.pfx
 *.p12
+*.jks
+*.keystore
+keystore.properties
 .vscode/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Android local tooling, model caches and machine-specific configuration
+/android/.gradle/
+/android/.kotlin/
+/android/.dependencies/
+/android/.models/
+/android/.local/
+/android/app/.cxx/
+/android/local.properties
