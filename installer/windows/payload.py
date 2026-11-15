@@ -33,6 +33,49 @@ MODEL_DIRS = (
 )
 
 
+def distribution_file_allowed(name, relative):
+    if name != "pyside6-essentials":
+        return True
+    path = Path(relative)
+    if path.parts[0] != "PySide6":
+        return True
+    local = path.relative_to("PySide6").as_posix()
+    # This application uses Qt Widgets and SVG icons, not the wheel's QML,
+    # designer, PDF or virtual-keyboard modules. Keep a replaceable shared runtime.
+    if local.startswith("support/"):
+        return path.suffix in {".py", ".pyi", ".json"}
+    return local in {
+        "__init__.py",
+        "_config.py",
+        "_git_pyside_version.py",
+        "py.typed",
+        "QtCore.pyd",
+        "QtGui.pyd",
+        "QtWidgets.pyd",
+        "QtSvg.pyd",
+        "Qt6Core.dll",
+        "Qt6Gui.dll",
+        "Qt6Widgets.dll",
+        "Qt6OpenGL.dll",
+        "Qt6Svg.dll",
+        "pyside6.abi3.dll",
+        "msvcp140.dll",
+        "msvcp140_1.dll",
+        "msvcp140_2.dll",
+        "vcruntime140.dll",
+        "vcruntime140_1.dll",
+        "plugins/platforms/qwindows.dll",
+        "plugins/platforms/qminimal.dll",
+        "plugins/platforms/qoffscreen.dll",
+        "plugins/styles/qmodernwindowsstyle.dll",
+        "plugins/imageformats/qgif.dll",
+        "plugins/imageformats/qico.dll",
+        "plugins/imageformats/qjpeg.dll",
+        "plugins/imageformats/qsvg.dll",
+        "plugins/iconengines/qsvgicon.dll",
+    }
+
+
 def dependency_closure(requirements, distributions):
     available = {}
     for distribution in distributions:
@@ -148,6 +191,8 @@ def build(output, data, *, private_development=False):
         if not distribution.files:
             raise ValueError("Distribution has no installed file record: " + name)
         for relative in distribution.files:
+            if not distribution_file_allowed(name, relative):
+                continue
             source = record_path(origin, relative)
             if source is not None and source.is_file():
                 copy(source, Path("python/site-packages") / relative)

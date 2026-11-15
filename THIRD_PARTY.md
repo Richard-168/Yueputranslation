@@ -26,6 +26,8 @@
 
 Python 直接依赖在 `pyproject.toml` 中声明，包括 Qt / PySide6、sherpa-onnx、ONNX Runtime、Canto-TTS、OpenCC、音频与数字处理库。Qt/PySide6 含独立许可义务；制作桌面安装包时还需检查所用 Qt 模块、动态链接方式、许可证及告知文件。默认普通话路径不再依赖 `piper-phonemize`。
 
+Windows Alpha 2 打包只收集所需 Qt Widgets/SVG 运行文件与插件，排除 QML、QtQuick、虚拟键盘、PDF 和 Designer。PySide6/Shiboken/Qt 按 LGPLv3 使用并保留可替换的动态库；SoXR 与 libsndfile/MP3 codec 另有 LGPL 义务。发布附件必须同时提供相应版本的源码、原始构建配方及补丁与替换说明。额外告知见 `installer/windows/licenses/README.md`；模型许可检查不检查这些二进制组件。sherpa-onnx-core 2.0.1 已移除 eSpeak-NG/piper-phonemize，其自带 ONNX Runtime 1.28.2 与独立 Python ONNX Runtime 1.31.1 的许可分别保留。
+
 `vocals.py` 的频谱布局与重建方式参考 [python-audio-separator](https://github.com/nomadkaraoke/python-audio-separator) 的 MDX 实现（MIT，Copyright © 2023 karaokenerds），使用独立 NumPy 适配器；该代码许可不覆盖 Kim_Vocal_2 模型权重。上游告知文件位于 `licenses/python-audio-separator.txt`。
 
 诊断脚本还可使用 Qwen3、Qwen3-ASR 0.6B、旧版 HY-MT 等候选。候选许可也不由默认模型或本项目的许可替代。用户录音、音乐和歌词不属于本项目源码授权范围，不作为测试资产发布。

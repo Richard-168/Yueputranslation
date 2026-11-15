@@ -12,10 +12,10 @@
 [Setup]
 AppId={{5E8865A3-45E3-4F60-9488-24386C4B015A}
 AppName=粤普同传
-AppVersion=0.1.0-dev.20261115
-AppVerName=粤普同传 0.1.0 开发预览
+AppVersion=0.1.0-alpha.2
+AppVerName=粤普同传 0.1.0 Alpha 2
 AppPublisher=YuePuTranslate contributors
-VersionInfoVersion=0.1.0.1
+VersionInfoVersion=0.1.0.2
 DefaultDirName={localappdata}\Programs\YuePuTranslate
 DefaultGroupName=粤普同传
 DisableProgramGroupPage=yes
@@ -24,7 +24,7 @@ ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.18362
 OutputDir={#OutputDirectory}
-OutputBaseFilename=YuePuTranslate-0.1.0-dev-Windows-x64-Setup
+OutputBaseFilename=YuePuTranslate-0.1.0-alpha.2-Windows-x64-Setup
 WizardStyle=modern
 DisableWelcomePage=no
 InfoBeforeFile=使用说明.txt

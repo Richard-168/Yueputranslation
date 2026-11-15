@@ -10,3 +10,4 @@
 
 # Model evidence hashes refer to exact bytes; preserve upstream line endings.
 licenses/models/** -text
+installer/windows/licenses/** -text

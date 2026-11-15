@@ -4,6 +4,7 @@ import unittest
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+import payload  # noqa: E402
 from payload import dependency_closure, record_path, write_file_list  # noqa: E402
 
 
@@ -15,6 +16,31 @@ class FakeDistribution:
 
 
 class PayloadBoundaryTests(unittest.TestCase):
+    def test_widgets_package_keeps_runtime_but_excludes_unused_qt_modules(self):
+        for name in (
+            "PySide6/QtWidgets.pyd",
+            "PySide6/Qt6Gui.dll",
+            "PySide6/Qt6Svg.dll",
+            "PySide6/plugins/platforms/qwindows.dll",
+            "PySide6/plugins/platforms/qoffscreen.dll",
+            "PySide6/plugins/iconengines/qsvgicon.dll",
+            "PySide6/support/__init__.py",
+            "PySide6_Essentials-6.8.3.dist-info/METADATA",
+        ):
+            self.assertTrue(payload.distribution_file_allowed("pyside6-essentials", name), name)
+        for name in (
+            "PySide6/QtQml.pyd",
+            "PySide6/Qt6Quick.dll",
+            "PySide6/Qt6VirtualKeyboard.dll",
+            "PySide6/qml/QtQuick/VirtualKeyboard/qtvirtualkeyboardplugin.dll",
+            "PySide6/plugins/platforminputcontexts/qtvirtualkeyboardplugin.dll",
+            "PySide6/plugins/imageformats/qpdf.dll",
+            "PySide6/plugins/imageformats/qwebp.dll",
+            "PySide6/designer.exe",
+        ):
+            self.assertFalse(payload.distribution_file_allowed("pyside6-essentials", name), name)
+        self.assertTrue(payload.distribution_file_allowed("shiboken6", "shiboken6/Shiboken.pyd"))
+
     def test_installer_input_list_excludes_files_added_after_the_payload_snapshot(self):
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
