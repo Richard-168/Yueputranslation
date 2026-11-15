@@ -3,6 +3,7 @@
 import argparse
 import concurrent.futures
 import json
+import sys
 import urllib.parse
 import zipfile
 from pathlib import Path
@@ -10,17 +11,17 @@ from pathlib import Path
 from artifacts import digest, fetch, get_json, valid
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT.parent / "tools"))
+from model_licenses import review, verify_artifacts  # noqa: E402
+
+LICENSE_MODEL_IDS = ("asr-wenet", "hymt2", "vad", "tts-zh")
 REPOS = {
     "asr": (
-        "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
-        "2365baeacb507f821a0c8120fcee3d484dba7a07",
+        "csukuangfj/sherpa-onnx-wenetspeech-yue-u2pp-conformer-ctc-zh-en-cantonese-int8-2025-09-10",
+        "c911764e8227cf372ee60adc75f7f407e5b8c905",
     ),
     "translation": ("tencent/Hy-MT2-1.8B-GGUF", "a0c709d9fac510f2c807aa3af52872340dc37a4a"),
     "tts-zh": ("csukuangfj/vits-melo-tts-zh_en", "a0d5c6a264c0ef92d70d8661d8cc502d79627cd6"),
-    "tts-yue": (
-        "csukuangfj/vits-cantonese-hf-xiaomaiiwn",
-        "27e0da148bbe6c120107c0d6d01c218337f803e8",
-    ),
 }
 
 
@@ -31,7 +32,15 @@ def main():
     )
     parser.add_argument("--output", type=Path, default=ROOT.parent / "outputs/android-models")
     parser.add_argument("--no-pack", action="store_true")
+    parser.add_argument("--private-development", action="store_true")
+    parser.add_argument("--check-licenses", action="store_true")
     args = parser.parse_args()
+    model_licenses = review(
+        "android", LICENSE_MODEL_IDS, private_development=args.private_development
+    )
+    if args.check_licenses:
+        print(json.dumps(model_licenses))
+        return
     args.output.mkdir(parents=True, exist_ok=True)
     specs = []
     for component, (repo, revision) in REPOS.items():
@@ -60,22 +69,10 @@ def main():
                         or (name.startswith("dict/") and name.endswith(".utf8"))
                     )
                 )
-                or (
-                    component == "tts-yue"
-                    and name
-                    in {
-                        "vits-cantonese-hf-xiaomaiiwn.onnx",
-                        "tokens.txt",
-                        "lexicon.txt",
-                        "rule.fst",
-                    }
-                )
             )
             if not wanted:
                 continue
             local_name = "model.gguf" if component == "translation" else name
-            if component == "tts-yue" and name.endswith(".onnx"):
-                local_name = "model.onnx"
             lfs = entry.get("lfs")
             specs.append(
                 dict(
@@ -85,11 +82,16 @@ def main():
                     algorithm="sha256" if lfs else "git-sha1",
                     url=f"https://huggingface.co/{repo}/resolve/{revision}/{urllib.parse.quote(name)}",
                     desktop=(
-                        "models/asr/" + name
+                        "models/asr-wenet/" + name
                         if component == "asr"
                         else "models/hymt2/" + name
                         if component == "translation"
                         else ""
+                    ),
+                    cache_path=(
+                        "asr-wenet/" + local_name
+                        if component == "asr"
+                        else f"{component}/{local_name}"
                     ),
                 )
             )
@@ -111,7 +113,7 @@ def main():
         else:
             path = fetch(
                 spec["url"],
-                ROOT / ".models" / spec["path"],
+                ROOT / ".models" / spec.get("cache_path", spec["path"]),
                 spec["size"],
                 spec["expected"],
                 spec["algorithm"],
@@ -120,12 +122,32 @@ def main():
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
         prepared = list(pool.map(prepare, specs))
+    asr_paths = {
+        spec["path"].removeprefix("asr/"): path
+        for spec, path, _ in prepared
+        if spec["path"].startswith("asr/")
+    }
+    verify_artifacts(model_licenses["models"]["asr-wenet"], ROOT.parent, files=asr_paths)
+    notice_names = {
+        evidence["file"]
+        for model in model_licenses["models"].values()
+        for evidence in model["evidence"]
+    } | {"registry.json", "sources.json"}
+    for name in sorted(notice_names):
+        path = ROOT.parent / "licenses/models" / name
+        prepared.append(
+            (dict(path="licenses/models/" + name, size=path.stat().st_size), path, digest(path))
+        )
     catalog = dict(
         format=1,
-        profile="android-offline-dev-v1",
+        profile="android-offline-wenet-system-yue-v2",
         files=[dict(path=spec["path"], size=spec["size"], sha256=sha) for spec, _, sha in prepared],
         sources=REPOS,
-        redistribution="Cantonese VITS voice license unverified; private development only",
+        cantonese_speech="Installed offline system Cantonese voice required; no Cantonese weights bundled",
+        redistribution="private-development"
+        if args.private_development
+        else "public-model-permissions-reviewed",
+        model_licenses=model_licenses,
     )
     text = json.dumps(catalog, ensure_ascii=False, indent=2)
     assets = ROOT / "app/src/main/assets"

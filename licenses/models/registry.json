@@ -1,0 +1,221 @@
+{
+  "format": 1,
+  "reviewed": "2026-11-15",
+  "profiles": {
+    "windows": [
+      "asr-wenet",
+      "canto",
+      "hymt2",
+      "vad",
+      "tts-zh",
+      "song-asr-large",
+      "song-separator"
+    ],
+    "android": [
+      "asr-wenet",
+      "hymt2",
+      "vad",
+      "tts-zh"
+    ]
+  },
+  "models": {
+    "asr": {
+      "status": "unresolved",
+      "license": "LicenseRef-FunASR-Model-1.1",
+      "source": "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
+      "revision": "2365baeacb507f821a0c8120fcee3d484dba7a07",
+      "reason": "Fixed ONNX artifact redistribution scope awaits licensor confirmation; do not substitute the code license.",
+      "evidence": [
+        {
+          "file": "FunASR-MODEL-LICENSE-v1.1.txt",
+          "sha256": "7dba975a2069691db4992b0592d70828b330d2f8a30a71450f4e152a554e84f8"
+        },
+        {
+          "file": "SenseVoice-ONNX-LICENSE.txt",
+          "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+        },
+        {
+          "file": "SenseVoice-ONNX-README.md",
+          "sha256": "763991a00edaea534ab36bf1b7cf89e61e911666dcfabbba71f91f9f7c593a63"
+        },
+        {
+          "file": "SenseVoice-clarification-status.json",
+          "sha256": "6424350b85056d282d2b23507a31090f5ff9d42fead4f8568aef5a66963f51aa"
+        }
+      ]
+    },
+    "canto": {
+      "status": "approved",
+      "license": "Apache-2.0",
+      "source": "typangaa/canto-tts-nano",
+      "revision": "fe17418a293d9be85685ddf750b0cfef9c88abb4",
+      "reason": "Retain model/codec attribution, license and model cards; training recordings are not licensed by this notice.",
+      "evidence": [
+        {
+          "file": "Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "file": "canto-tts-nano-README.md",
+          "sha256": "8684f5b4e8a00b8b4a64cacdabc432ea6203632d9595baad6fb68d449645fe9e"
+        },
+        {
+          "file": "MOSS-codec-README.md",
+          "sha256": "3c7b9e9ef1c8c5e5c829a077a1d32c1f7aea1668f2bf17ead318ff04bf1e6fe4"
+        }
+      ]
+    },
+    "hymt2": {
+      "status": "approved",
+      "license": "Apache-2.0",
+      "source": "tencent/Hy-MT2-1.8B-GGUF",
+      "revision": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
+      "reason": "Retain Tencent license and model card; indicate modifications if any.",
+      "evidence": [
+        {
+          "file": "Hy-MT2-Apache-2.0.txt",
+          "sha256": "a1d52d448f81c584a47c583e19dfab2d3851c7c84431b07baee093c1113ed114"
+        },
+        {
+          "file": "Hy-MT2-README.md",
+          "sha256": "6811073b8b3d20a9a4db959c2b3f36e39e66bdb953cfecbdd8223fc20cc9a05b"
+        }
+      ]
+    },
+    "vad": {
+      "status": "approved",
+      "license": "MIT",
+      "source": "snakers4/silero-vad; k2-fsa/sherpa-onnx conversion",
+      "revision": "sha256:9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+      "reason": "Retain Silero Team copyright and MIT notice; converted v4 16kHz artifact.",
+      "evidence": [
+        {
+          "file": "Silero-VAD-v4-MIT.txt",
+          "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+        }
+      ]
+    },
+    "song-asr-large": {
+      "status": "approved",
+      "license": "Apache-2.0",
+      "source": "ggml-org/Qwen3-ASR-1.7B-GGUF; Qwen/Qwen3-ASR-1.7B",
+      "revision": "36a678687ba7d07a74ca70ccb0e36902e005fb80",
+      "reason": "Retain Qwen original and GGUF provenance, Apache license and model cards.",
+      "evidence": [
+        {
+          "file": "Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "file": "Qwen3-ASR-GGUF-README.md",
+          "sha256": "0d9910d9a297a4b92d46094d03e26b948614b6afd429499199c5a449274d2995"
+        },
+        {
+          "file": "Qwen3-ASR-original-README.md",
+          "sha256": "5058416891bc47a2051557765997e8c42f8eb78a0e33c3e775bd17d4b0ba4d50"
+        }
+      ]
+    },
+    "song-separator": {
+      "status": "approved",
+      "license": "MIT",
+      "source": "Kimberley Jensen; TRvlvr/model_repo asset 108817997",
+      "revision": "sha256:ce74ef3b6a6024ce44211a07be9cf8bc6d87728cc852a68ab34eb8e58cde9c8b",
+      "reason": "Author permission explicitly extends MIT to Kim_Vocal_2; retain author attribution, MIT notice and original permission evidence.",
+      "evidence": [
+        {
+          "file": "Kim_Vocal_2-MIT.txt",
+          "sha256": "332ec481a53b42625a2fc0a5e2c3ae327c0bc54071aa5ce9702b2b6cbba3adb8"
+        },
+        {
+          "file": "Kim_Vocal_2-author-permission.json",
+          "sha256": "dc9ece6c7ae46aaf3b3efd518f4751cee09b44478cbd2147e757db289f3c430e"
+        }
+      ]
+    },
+    "vits-piper-zh_CN-huayan-medium": {
+      "status": "unresolved",
+      "license": "NOASSERTION",
+      "source": "csukuangfj/vits-piper-zh_CN-huayan-medium",
+      "revision": "8baec97632a57257b09073b7986f4d319efdc29a",
+      "reason": "Model card states dataset license Unknown; upstream dataset is unavailable. Replace or obtain rights confirmation.",
+      "evidence": [
+        {
+          "file": "Huayan-MODEL_CARD.md",
+          "sha256": "25d7d8f7a03e9382e629c5c4f074176e7ca84e08be12a873022e91fcac98c2c7"
+        }
+      ]
+    },
+    "tts-zh": {
+      "status": "approved",
+      "license": "MIT",
+      "source": "csukuangfj/vits-melo-tts-zh_en; MyShell.ai",
+      "revision": "a0d5c6a264c0ef92d70d8661d8cc502d79627cd6",
+      "reason": "Retain MyShell.ai MIT license and model card; include dictionary notices.",
+      "evidence": [
+        {
+          "file": "MeloTTS-MIT.txt",
+          "sha256": "88a50e5a02bbc2a5c2f084dc19da751aa97b1690f5fda76cd8005c8634d1ca70"
+        },
+        {
+          "file": "MeloTTS-README.md",
+          "sha256": "ae6e44dead53dfdbd5b4a77106226f3118eb910222b46cb5533a3860773fc6c7"
+        },
+        {
+          "file": "CppJieba-MIT.txt",
+          "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0"
+        },
+        {
+          "file": "Jieba-MIT.txt",
+          "sha256": "18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37"
+        }
+      ]
+    },
+    "tts-yue": {
+      "status": "unresolved",
+      "license": "NOASSERTION",
+      "source": "csukuangfj/vits-cantonese-hf-xiaomaiiwn; xiaomaiiwn/vits-cantonese",
+      "revision": "27e0da148bbe6c120107c0d6d01c218337f803e8",
+      "reason": "Original and conversion repositories have no model license; obtain permission or use a verified replacement.",
+      "evidence": [
+        {
+          "file": "Xiaomai-original-metadata.json",
+          "sha256": "4bc454ba55c73186b92106008ea7fe6b19f0a3d44381c337e6355dd90e49928e"
+        },
+        {
+          "file": "Xiaomai-ONNX-metadata.json",
+          "sha256": "23775da1c66fb0421a8ed1a6f59c16b871413ac63ee3dccf1c1de1cdd5133526"
+        }
+      ]
+    },
+    "asr-wenet": {
+      "status": "approved",
+      "license": "Apache-2.0",
+      "source": "ASLP-lab/WSYue-ASR u2pp_conformer_yue; csukuangfj/sherpa-onnx conversion",
+      "revision": "c911764e8227cf372ee60adc75f7f407e5b8c905",
+      "upstream_revision": "4a74a91430485d7456cb786f1d0ff0aba1185ded",
+      "reason": "Independent U2++ Conformer checkpoint, not the SenseVoice-derived checkpoint in the same collection. Preserve Apache license, original model card and conversion attribution.",
+      "artifact_sha256": {
+        "model.int8.onnx": "201bfd9e12ec4ac9ee3b23c5e071d9fa2381a8b21df317e2e08a170d6f1f55d3",
+        "tokens.txt": "c7750677a1183606d2fd6f16d792e06e70d9843dba8a0c6e23a9dec78e06977a"
+      },
+      "evidence": [
+        {
+          "file": "Apache-2.0.txt",
+          "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+        },
+        {
+          "file": "WSYue-ASR-README.md",
+          "sha256": "6c618e2068edff462bb78437de43ffbf372ac97cb748d60816ba2beeef25b2ef"
+        },
+        {
+          "file": "Wenet-Yue-ONNX-README.md",
+          "sha256": "bb7e32790a78c1832c6e8eda7199d70591e9fe3d677be52d40722062a3023d36"
+        }
+      ]
+    }
+  },
+  "external_requirements": {
+    "android": "An installed system voice reporting offline Cantonese support is required; no Cantonese voice weights are redistributed."
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "id": "csukuangfj/vits-cantonese-hf-xiaomaiiwn",
+  "sha": "27e0da148bbe6c120107c0d6d01c218337f803e8",
+  "cardData": null,
+  "siblings": [
+    {
+      "rfilename": ".gitattributes"
+    },
+    {
+      "rfilename": "config.json"
+    },
+    {
+      "rfilename": "lexicon.txt"
+    },
+    {
+      "rfilename": "rule.fst"
+    },
+    {
+      "rfilename": "tokens.txt"
+    },
+    {
+      "rfilename": "vits-cantonese-hf-xiaomaiiwn.onnx"
+    }
+  ]
+}

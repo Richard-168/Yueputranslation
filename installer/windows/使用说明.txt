@@ -19,3 +19,6 @@
 详细使用说明见安装目录 docs/windows.md，联网说明见 docs/online.md。
 第三方许可见 docs/THIRD_PARTY.md、docs/licenses、python/LICENSE.txt，
 以及 data/models 和 Python 各组件内附的许可。第三方模型仍按其各自许可使用。
+普通话译音已更换为 MyShell.ai MeloTTS（MIT）；Kim_Vocal_2 的作者 MIT 许可已留档。
+基础识别已改为 WenetSpeech-Yue U2++（Apache-2.0）；旧 SenseVoice 已退出新安装数据。
+旧安装包必须重建并重新核验；源码修改不会自动修复既有 EXE／BIN。

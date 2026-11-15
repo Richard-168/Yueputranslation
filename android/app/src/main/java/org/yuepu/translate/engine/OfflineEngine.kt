@@ -1,16 +1,17 @@
 package org.yuepu.translate.engine
 
+import android.content.Context
 import com.k2fsa.sherpa.onnx.*
 import java.io.File
 import java.util.concurrent.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 import org.yuepu.translate.core.Direction
 
-internal class OfflineEngine(private val root: File) : AutoCloseable {
+internal class OfflineEngine(private val root: File, private val context: Context) : AutoCloseable {
     private var recognizer: OfflineRecognizer? = null
     private var recognitionDirection: Direction? = null
     private var mandarin: OfflineTts? = null
-    private var cantonese: OfflineTts? = null
+    private var cantonese: SystemCantoneseTts? = null
     @Volatile private var translator = 0L
     private val unsupported = Regex("""[\u3040-\u30ff\uac00-\ud7af]""")
 
@@ -39,13 +40,9 @@ internal class OfflineEngine(private val root: File) : AutoCloseable {
             ruleFsts = listOf("date.fst", "number.fst", "phone.fst").joinToString(",") { path("tts-zh/$it") },
         ))
         check(cancelled)
-        status("正在加载粤语译音…")
-        cantonese = OfflineTts(config = OfflineTtsConfig(
-            model = OfflineTtsModelConfig(vits = OfflineTtsVitsModelConfig(
-                model = path("tts-yue/model.onnx"), tokens = path("tts-yue/tokens.txt"),
-                lexicon = path("tts-yue/lexicon.txt"),
-            ), numThreads = 2), ruleFsts = path("tts-yue/rule.fst"),
-        ))
+        status("正在检查手机离线粤语语音…")
+        cantonese = SystemCantoneseTts(context)
+        checkNotNull(cantonese).load(cancelled)
         check(cancelled)
     }
 
@@ -58,10 +55,8 @@ internal class OfflineEngine(private val root: File) : AutoCloseable {
         recognizer = OfflineRecognizer(config = OfflineRecognizerConfig(
             featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
             modelConfig = OfflineModelConfig(
-                senseVoice = OfflineSenseVoiceModelConfig(
-                    model = path("asr/model.int8.onnx"), language = direction.source,
-                    useInverseTextNormalization = true,
-                ), tokens = path("asr/tokens.txt"), numThreads = 2, provider = "cpu",
+                wenetCtc = OfflineWenetCtcModelConfig(model = path("asr/model.int8.onnx")),
+                tokens = path("asr/tokens.txt"), numThreads = 2, provider = "cpu",
             ),
         ))
         recognitionDirection = direction
@@ -96,7 +91,12 @@ internal class OfflineEngine(private val root: File) : AutoCloseable {
 
     fun synthesize(text: String, target: String, cancelled: AtomicBoolean, audio: (FloatArray, Int) -> Unit) {
         check(cancelled)
-        val model = checkNotNull(if (target == "zh") mandarin else cantonese)
+        require(target in setOf("zh", "yue"))
+        if (target == "yue") {
+            checkNotNull(cantonese).synthesize(text, cancelled, audio)
+            return
+        }
+        val model = checkNotNull(mandarin)
         var emitted = 0
         model.generateWithConfigAndCallback(text, GenerationConfig(sid = 0, speed = 1f)) { samples ->
             if (cancelled.get()) 0 else {
@@ -109,7 +109,7 @@ internal class OfflineEngine(private val root: File) : AutoCloseable {
         kotlin.check(emitted > 0) { "未生成有效译音。" }
     }
 
-    fun cancel() { if (translator != 0L) NativeTranslator.cancel(translator) }
+    fun cancel() { cantonese?.cancel(); if (translator != 0L) NativeTranslator.cancel(translator) }
 
     override fun close() {
         cancel()
@@ -117,7 +117,7 @@ internal class OfflineEngine(private val root: File) : AutoCloseable {
         recognizer?.release(); recognizer = null
         recognitionDirection = null
         mandarin?.release(); mandarin = null
-        cantonese?.release(); cantonese = null
+        cantonese?.close(); cantonese = null
         if (translator != 0L) NativeTranslator.destroy(translator)
         translator = 0
     }

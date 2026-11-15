@@ -11,6 +11,20 @@ from yuepu_translate.paths import data_dir
 
 
 class EntryTests(unittest.TestCase):
+    def test_default_asr_uses_the_licensed_wenet_model_for_both_directions(self):
+        from yuepu_translate import model_runtime
+
+        native = types.ModuleType("sherpa_onnx")
+        native.OfflineRecognizer = types.SimpleNamespace(from_wenet_ctc=Mock())
+        with patch.dict(sys.modules, {"sherpa_onnx": native}):
+            for language in ("", "zh", "yue", "en"):
+                model_runtime.recognizer(language)
+                kwargs = native.OfflineRecognizer.from_wenet_ctc.call_args.kwargs
+                self.assertTrue(
+                    Path(kwargs["model"]).as_posix().endswith("asr-wenet/model.int8.onnx")
+                )
+                self.assertNotIn("language", kwargs)
+
     def test_absolute_data_directory_is_independent_of_working_directory(self):
         with tempfile.TemporaryDirectory() as folder:
             with patch.dict(os.environ, {"YUEPU_DATA_DIR": folder}):

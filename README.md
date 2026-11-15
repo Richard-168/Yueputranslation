@@ -74,7 +74,7 @@ CI 只运行静态检查、无模型测试和打包；联网契约测试仅连�
 
 ## 模型与限制
 
-flash 链路为 SenseVoice-Small INT8 → Hy-MT2-1.8B Q4_K_M → Canto-TTS-Nano / Piper 普通话，使用 Silero VAD 断句。文件来源和固定版本见 [第三方组件说明](THIRD_PARTY.md) 及模型准备脚本。
+flash 链路为 WenetSpeech-Yue U2++ CTC INT8 → Hy-MT2-1.8B Q4_K_M → Canto-TTS-Nano / MeloTTS 普通话，使用 Silero VAD 断句。基础识别与普通话音色已更换为许可明确的模型，旧环境运行 `python experiments/offline-poc/prepare_models.py asr mandarin` 准备；不会回退到旧 SenseVoice 或 Huayan 权重。新 CTC 不提供音频语言识别标签，翻译方向由用户选择，无法保证排除误听成中文的其他语言音频。文件来源和固定版本见 [第三方组件说明](THIRD_PARTY.md) 及模型准备脚本。
 
 pro（原段落修订）为默认选项，需准备额外模型；仅用 flash 时无需此模型：
 
@@ -96,4 +96,4 @@ flash 收音约在首个 0.8 秒音频窗口后尝试显示原文，之后约每
 
 欢迎提交可复现的问题和小范围改进，请先阅读 [贡献指南](CONTRIBUTING.md)、[行为准则](CODE_OF_CONDUCT.md) 和 [安全说明](SECURITY.md)。请勿在公开 Issue 上传私人录音、密钥或未获授权的歌曲。
 
-本项目原创源码按 [MIT](LICENSE) 许可，可修改和商用。第三方模型、库和运行时保留各自许可，不能用本项目 MIT 许可替代其授权；发布包含模型的安装包前仍需逐项核对。
+本项目原创源码按 [MIT](LICENSE) 许可，可修改和商用。第三方模型、库和运行时保留各自许可。模型来源、许可及作者授权证据见 [模型许可目录](licenses/models/README.md)。SenseVoice 与 Android 原粤语权重已退出当前运行／发布配置；Android 粤语改用用户合法安装的离线系统音色。两个平台的当前模型许可检查均可通过，但这不是整个软件的发布批准；旧安装附件仍须重建并核验。

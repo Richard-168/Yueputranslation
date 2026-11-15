@@ -49,7 +49,9 @@ pro 是原 `SongSession` 段落修订的增强，仍使用同一个 `make_voice_
 
 `Preferences.sensitivity` 只接受 `standard` / `sensitive`，旧设置缺失时使用标准档。主界面切换立即保存，保存失败恢复原选择；设置对话框 Save/Cancel 沿用既有行为。开始收音时将当前选择快照传给同一个流工厂，pro/flash 及两种音源均如此；收音或处理期间禁用切换。
 
-实时 `SongSession.run` 委托 `paragraph_live.run_live`：主任务调用基础 SenseVoice 显示暂定原文，不冻结轻量结果；独立复核线程拥有唯一 `SessionInference`，优先处理原有检查点和句末，同时合并待翻译草稿。检查点使用 `ParagraphRevision` 衔接已退出音频窗口的前文，不制造停顿、不固定猜测；同一有界邮箱的草稿任务调用 `IncrementalTranslation` 生成暂定译文，不触发播报。草稿变化约每 2.5 秒至多重译一次，未变化内容复用缓存，确认任务优先。句末固定原文后再调用 `IncrementalTranslation` 翻译新增确认记录，再按设置播报。一个推理实例继续持有同任务 ASR/翻译的首次云失败回退状态，无需跨线程共享云客户端。文件仍走原 `SongFile` 路径。
+实时 `SongSession.run` 委托 `paragraph_live.run_live`：主任务调用基础 WenetSpeech-Yue U2++ CTC 显示暂定原文，不冻结轻量结果；独立复核线程拥有唯一 `SessionInference`，优先处理原有检查点和句末，同时合并待翻译草稿。检查点使用 `ParagraphRevision` 衔接已退出音频窗口的前文，不制造停顿、不固定猜测；同一有界邮箱的草稿任务调用 `IncrementalTranslation` 生成暂定译文，不触发播报。草稿变化约每 2.5 秒至多重译一次，未变化内容复用缓存，确认任务优先。句末固定原文后再调用 `IncrementalTranslation` 翻译新增确认记录，再按设置播报。一个推理实例继续持有同任务 ASR/翻译的首次云失败回退状态，无需跨线程共享云客户端。文件仍走原 `SongFile` 路径。
+
+基础 CTC 没有音频语言识别输出；`recognition.language` 记录用户选择的方向，`language_detection=false`，不能解释为检测出的语种。仍拦截输出中的日／韩文字，但无法可靠识别被误听成中文的其他语言音频。新默认模型不回退到旧 SenseVoice，准备与许可材料见 `THIRD_PARTY.md`。
 
 两条队列均有界，草稿只保留最新份，检查点/确认任务最多等待 3 条；超限明确停止。取消传播到本次推理，复核线程退出并关闭资源后结束任务。大模型无有效文字时保留未确认状态，不把草稿冒充确认。
 

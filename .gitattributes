@@ -7,3 +7,6 @@
 
 # Preserve upstream formatting in third-party license notices.
 **/licenses/** -whitespace
+
+# Model evidence hashes refer to exact bytes; preserve upstream line endings.
+licenses/models/** -text

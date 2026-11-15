@@ -321,9 +321,9 @@ def main():
 
     report = dict(
         input="paced local PCM injection; no physical device",
-        asr="real SenseVoice drafts + Qwen3-ASR-1.7B paragraph review"
+        asr="real WenetSpeech-Yue U2++ drafts + Qwen3-ASR-1.7B paragraph review"
         if args.profile == "pro"
-        else "real SenseVoice",
+        else "real WenetSpeech-Yue U2++",
         translation="real local Hy-MT2",
         source=args.source,
         device_ui=args.device,

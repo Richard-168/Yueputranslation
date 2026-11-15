@@ -1,0 +1,107 @@
+{
+  "canto-tts-nano-README.md": {
+    "url": "https://huggingface.co/typangaa/canto-tts-nano/resolve/fe17418a293d9be85685ddf750b0cfef9c88abb4/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "8684f5b4e8a00b8b4a64cacdabc432ea6203632d9595baad6fb68d449645fe9e"
+  },
+  "MOSS-codec-README.md": {
+    "url": "https://huggingface.co/typangaa/canto-tts-nano/resolve/fe17418a293d9be85685ddf750b0cfef9c88abb4/MOSS-Audio-Tokenizer-Nano-ONNX/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "3c7b9e9ef1c8c5e5c829a077a1d32c1f7aea1668f2bf17ead318ff04bf1e6fe4"
+  },
+  "Hy-MT2-Apache-2.0.txt": {
+    "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/a0c709d9fac510f2c807aa3af52872340dc37a4a/LICENSE.txt",
+    "retrieved": "2026-11-15",
+    "sha256": "a1d52d448f81c584a47c583e19dfab2d3851c7c84431b07baee093c1113ed114"
+  },
+  "Hy-MT2-README.md": {
+    "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/a0c709d9fac510f2c807aa3af52872340dc37a4a/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "6811073b8b3d20a9a4db959c2b3f36e39e66bdb953cfecbdd8223fc20cc9a05b"
+  },
+  "Qwen3-ASR-GGUF-README.md": {
+    "url": "https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF/resolve/36a678687ba7d07a74ca70ccb0e36902e005fb80/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "0d9910d9a297a4b92d46094d03e26b948614b6afd429499199c5a449274d2995"
+  },
+  "Qwen3-ASR-original-README.md": {
+    "url": "https://huggingface.co/Qwen/Qwen3-ASR-1.7B/resolve/7278e1e70fe206f11671096ffdd38061171dd6e5/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "5058416891bc47a2051557765997e8c42f8eb78a0e33c3e775bd17d4b0ba4d50"
+  },
+  "Silero-VAD-v4-MIT.txt": {
+    "url": "https://raw.githubusercontent.com/snakers4/silero-vad/v4.0/LICENSE",
+    "retrieved": "2026-11-15",
+    "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+  },
+  "MeloTTS-MIT.txt": {
+    "url": "https://huggingface.co/csukuangfj/vits-melo-tts-zh_en/resolve/a0d5c6a264c0ef92d70d8661d8cc502d79627cd6/LICENSE",
+    "retrieved": "2026-11-15",
+    "sha256": "88a50e5a02bbc2a5c2f084dc19da751aa97b1690f5fda76cd8005c8634d1ca70"
+  },
+  "MeloTTS-README.md": {
+    "url": "https://huggingface.co/csukuangfj/vits-melo-tts-zh_en/resolve/a0d5c6a264c0ef92d70d8661d8cc502d79627cd6/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "ae6e44dead53dfdbd5b4a77106226f3118eb910222b46cb5533a3860773fc6c7"
+  },
+  "FunASR-MODEL-LICENSE-v1.1.txt": {
+    "url": "https://raw.githubusercontent.com/modelscope/FunASR/58830eca4012644aac0c3218c3ccc7d98f003fda/MODEL_LICENSE",
+    "retrieved": "2026-11-15",
+    "sha256": "7dba975a2069691db4992b0592d70828b330d2f8a30a71450f4e152a554e84f8"
+  },
+  "SenseVoice-ONNX-LICENSE.txt": {
+    "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/LICENSE",
+    "retrieved": "2026-11-15",
+    "sha256": "221c6df10b0931a5629adad671ea48fb7747e034c414b6d2bfa275bc3dd4ea17"
+  },
+  "SenseVoice-ONNX-README.md": {
+    "url": "https://huggingface.co/csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17/resolve/2365baeacb507f821a0c8120fcee3d484dba7a07/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "763991a00edaea534ab36bf1b7cf89e61e911666dcfabbba71f91f9f7c593a63"
+  },
+  "Kim_Vocal_2-author-permission.json": {
+    "url": "https://api.github.com/repos/KimberleyJensen/Mel-Band-Roformer-Vocal-Model/issues/comments/4296256618",
+    "retrieved": "2026-11-15",
+    "sha256": "dc9ece6c7ae46aaf3b3efd518f4751cee09b44478cbd2147e757db289f3c430e"
+  },
+  "SenseVoice-clarification-status.json": {
+    "url": "https://api.github.com/repos/modelscope/FunASR/issues/comments/5771978258",
+    "retrieved": "2026-11-15",
+    "sha256": "6424350b85056d282d2b23507a31090f5ff9d42fead4f8568aef5a66963f51aa"
+  },
+  "Xiaomai-original-metadata.json": {
+    "url": "https://huggingface.co/api/models/xiaomaiiwn/vits-cantonese/revision/edfd61edacb1054e0d96263a155530eb051b14dd",
+    "retrieved": "2026-11-15",
+    "sha256": "4bc454ba55c73186b92106008ea7fe6b19f0a3d44381c337e6355dd90e49928e"
+  },
+  "Xiaomai-ONNX-metadata.json": {
+    "url": "https://huggingface.co/api/models/csukuangfj/vits-cantonese-hf-xiaomaiiwn/revision/27e0da148bbe6c120107c0d6d01c218337f803e8",
+    "retrieved": "2026-11-15",
+    "sha256": "23775da1c66fb0421a8ed1a6f59c16b871413ac63ee3dccf1c1de1cdd5133526"
+  },
+  "Huayan-MODEL_CARD.md": {
+    "url": "https://huggingface.co/csukuangfj/vits-piper-zh_CN-huayan-medium/resolve/8baec97632a57257b09073b7986f4d319efdc29a/MODEL_CARD",
+    "retrieved": "2026-11-15",
+    "sha256": "25d7d8f7a03e9382e629c5c4f074176e7ca84e08be12a873022e91fcac98c2c7"
+  },
+  "CppJieba-MIT.txt": {
+    "url": "https://raw.githubusercontent.com/yanyiwu/cppjieba/cbdf949eadb8887f060473b5dc6d3194655c8bef/LICENSE",
+    "retrieved": "2026-11-15",
+    "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0"
+  },
+  "Jieba-MIT.txt": {
+    "url": "https://raw.githubusercontent.com/fxsjy/jieba/67fa2e36e72f69d9134b8a1037b83fbb070b9775/LICENSE",
+    "retrieved": "2026-11-15",
+    "sha256": "18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37"
+  },
+  "WSYue-ASR-README.md": {
+    "url": "https://huggingface.co/ASLP-lab/WSYue-ASR/resolve/4a74a91430485d7456cb786f1d0ff0aba1185ded/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "6c618e2068edff462bb78437de43ffbf372ac97cb748d60816ba2beeef25b2ef"
+  },
+  "Wenet-Yue-ONNX-README.md": {
+    "url": "https://huggingface.co/csukuangfj/sherpa-onnx-wenetspeech-yue-u2pp-conformer-ctc-zh-en-cantonese-int8-2025-09-10/resolve/c911764e8227cf372ee60adc75f7f407e5b8c905/README.md",
+    "retrieved": "2026-11-15",
+    "sha256": "bb7e32790a78c1832c6e8eda7199d70591e9fe3d677be52d40722062a3023d36"
+  }
+}

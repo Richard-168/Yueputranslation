@@ -1,0 +1,19 @@
+{
+  "id": "xiaomaiiwn/vits-cantonese",
+  "sha": "edfd61edacb1054e0d96263a155530eb051b14dd",
+  "cardData": null,
+  "siblings": [
+    {
+      "rfilename": ".gitattributes"
+    },
+    {
+      "rfilename": "model/D.pth"
+    },
+    {
+      "rfilename": "model/G.pth"
+    },
+    {
+      "rfilename": "model/config.json"
+    }
+  ]
+}

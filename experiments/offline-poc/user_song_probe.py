@@ -211,7 +211,7 @@ def main():
         "没有人工逐字时间对齐的歌词真值，下表供同音源人工核对，不提供准确率。",
         "两个模型使用相同 WAV；固定窗口与软件实际分段分别标注。Qwen 耗时包含每次加载，不能当作常驻模型速度。",
         "",
-        "| 输入位置／类型 | 现有 SenseVoice | Qwen3-ASR-1.7B | 识别耗时（现有／候选） |",
+        "| 输入位置／类型 | 现有 WenetSpeech-Yue U2++ | Qwen3-ASR-1.7B | 识别耗时（现有／候选） |",
         "| --- | --- | --- | --- |",
     ]
     for row in compared:
@@ -289,7 +289,7 @@ def verify_lexical_gate():
         positive_languages = []
         for fixture, source in (("yue", "yue"), ("zh", "zh"), ("en", "zh")):
             samples, rate = sf.read(
-                str(ROOT / f"models/asr/test_wavs/{fixture}.wav"), dtype="float32"
+                str(ROOT / f"models/asr-wenet/test_wavs/{fixture}.wav"), dtype="float32"
             )
             positive = engine.recognize(
                 samples, rate, threading.Event(), source, lambda *args: None

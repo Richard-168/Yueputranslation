@@ -9,10 +9,17 @@ Android NDK 27.2.12479018 C++ runtime: LLVM notices in licenses/NDK-toolchain-NO
 License texts are included in assets/licenses/ and linked from the repository THIRD_PARTY.md.
 
 Models are imported separately and are not embedded in the APK:
-SenseVoice-Small INT8, Hy-MT2-1.8B Q4_K_M, Silero VAD,
-csukuangfj/vits-melo-tts-zh_en, csukuangfj/vits-cantonese-hf-xiaomaiiwn.
+WenetSpeech-Yue U2++ Conformer CTC INT8 (ASLP-lab, Apache-2.0),
+Hy-MT2-1.8B Q4_K_M (Tencent, Apache-2.0), Silero VAD (MIT),
+csukuangfj/vits-melo-tts-zh_en (MyShell.ai, MIT).
 Exact revisions and artifact hashes are recorded in model-catalog.json and the model preparation script.
 These model weights have separate licensing conditions.
-The Cantonese TTS candidate lacks a complete verified model license record.
-This development model pack must not be publicly redistributed pending resolution or replacement.
+MeloTTS Chinese/English voice: Copyright (c) 2024 MyShell.ai, MIT.
+Model license texts, model cards and permission evidence accompany the imported
+development pack under licenses/models/ and are integrity-checked with the models.
+Cantonese synthesis uses an installed system voice reporting offline support.
+The user installs that voice under its provider's terms; no Cantonese voice
+weights or speech engine package are redistributed by this application.
+SenseVoice, the previous Huayan voice and the Xiaomai Cantonese voice are not
+part of the current model pack. Their historical records are not new grants.
 This preview is not a public-distribution licensing audit.

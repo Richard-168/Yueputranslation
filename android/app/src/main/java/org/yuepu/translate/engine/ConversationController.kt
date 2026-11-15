@@ -87,7 +87,7 @@ internal class ConversationController(
         ready = false
         engine?.close(); engine = null
         models.importer.verify { flag.get() }
-        val loaded = OfflineEngine(models.root)
+        val loaded = OfflineEngine(models.root, context)
         engine = loaded
         try {
             loaded.load(direction, flag, ::state)

@@ -25,7 +25,8 @@ from canto_tts.backends.base import safe_prepare_text
 from . import model_runtime
 from .audio_profile import DEFAULT_SENSITIVITY, voice_profile
 from .capture_process import CaptureProcess
-from .languages import ASR_LANGUAGES, UNSUPPORTED_SCRIPT
+from .languages import ASR_LANGUAGES as ASR_LANGUAGES
+from .languages import UNSUPPORTED_SCRIPT
 from .numbers import spoken_numbers
 from .paths import DATA_DIR
 from .preferences import cache_directory
@@ -148,7 +149,6 @@ class AudioPlayer:
 class Engine:
     def __init__(self):
         self.asr = self.zh_tts = self.yue_tts = None
-        self.directed_asr = {}
         self.warmed = False
         self.converters = {"zh": opencc.OpenCC("t2s"), "yue": opencc.OpenCC("s2t")}
 
@@ -159,11 +159,13 @@ class Engine:
 
     def load(self, cancel, status):
         required = [
-            "models/asr/model.int8.onnx",
-            "models/asr/tokens.txt",
+            "models/asr-wenet/model.int8.onnx",
+            "models/asr-wenet/tokens.txt",
             "models/hymt2/Hy-MT2-1.8B-Q4_K_M.gguf",
             "models/canto/browser_poc_manifest.json",
-            "models/vits-piper-zh_CN-huayan-medium/zh_CN-huayan-medium.onnx",
+            "models/tts-zh/model.int8.onnx",
+            "models/tts-zh/tokens.txt",
+            "models/tts-zh/lexicon.txt",
             "models/vad/silero_vad.onnx",
             "runtime/llama-b12314/llama-completion.exe",
             "runtime/llama-b12314/llama-server.exe",
@@ -218,35 +220,19 @@ class Engine:
             self.check(cancel)
             return stream.result
 
-        def language(result):
-            return result.lang.removeprefix("<|").removesuffix("|>")
-
         result = decode(self.asr)
-        automatic_language = language(result)
-        redirected = automatic_language not in ASR_LANGUAGES or bool(
-            UNSUPPORTED_SCRIPT.search(result.text)
-        )
-        if redirected:
-            # SenseVoice exposes auto or one forced language, not an allowlist.
-            # Re-decode the original audio in the user's selected direction;
-            # never translate or rewrite the rejected Japanese/Korean text.
-            event("status", "识别语言超出范围，正按所选粤语／普通话方向重新识别…")
-            self.check(cancel)
-            if source not in self.directed_asr:
-                self.directed_asr[source] = model_runtime.recognizer(language=source)
-            self.check(cancel)
-            result = decode(self.directed_asr[source])
         text = result.text.strip()
-        if language(result) not in ASR_LANGUAGES or UNSUPPORTED_SCRIPT.search(text):
+        if UNSUPPORTED_SCRIPT.search(text):
             raise ValueError("未能识别为普通话、粤语或英文，请确认翻译方向并靠近麦克风重说。")
         if not text or not any(char.isalnum() for char in text):
             raise ValueError("没有识别到有效的人声文字，请等待人声或换一段清晰语音重试。")
         event(
             "recognition",
             dict(
-                automatic_language=automatic_language,
-                language=language(result),
-                redirected=redirected,
+                automatic_language=None,
+                language=source,
+                language_detection=False,
+                redirected=False,
                 source=source,
             ),
         )
@@ -336,15 +322,9 @@ class Engine:
         if target == "zh" and number_mode != "original":
             spoken, _ = spoken_numbers(spoken, number_mode)
         if target == "zh":
-            from piper_phonemize import phonemize_espeak
-
             config = sherpa_onnx.GenerationConfig()
             config.sid, config.speed = 0, 1.0
-            config.phoneme_codepoints = [
-                [ord(c) for c in sentence]
-                for sentence in phonemize_espeak(spoken, self.zh_tts.lang or "cmn")
-            ]
-            audio = self.zh_tts.generate("", config)
+            audio = self.zh_tts.generate(spoken, config)
             self.check(cancel)
             if not len(audio.samples) or audio.sample_rate <= 0:
                 raise RuntimeError("普通话译音生成失败。")

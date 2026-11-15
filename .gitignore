@@ -14,6 +14,8 @@ htmlcov/
 
 # Model weights, native runtimes and private session data (kept locally)
 models/
+!/licenses/models/
+!/licenses/models/**
 runtime/
 downloads/
 outputs/

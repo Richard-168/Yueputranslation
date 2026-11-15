@@ -1,0 +1,9 @@
+{
+  "id": 5771978258,
+  "html_url": "https://github.com/modelscope/FunASR/issues/3715#issuecomment-5771978258",
+  "body": "Documentation follow-up: I found that the SenseVoice English/Chinese READMEs still described an earlier reply in [SenseVoice #334](https://github.com/QwenAudio/SenseVoice/issues/334) as a completed official clarification, despite the later [reopening for license-owner/core-maintainer confirmation](https://github.com/QwenAudio/SenseVoice/issues/334#issuecomment-5463240506).\n\n[SenseVoice PR #357](https://github.com/QwenAudio/SenseVoice/pull/357) corrects that inconsistency. I also added a prominent status notice to the [earlier reply](https://github.com/QwenAudio/SenseVoice/issues/334#issuecomment-5083546605), retaining the original text as discussion history. The README correction is proposed, not yet merged.\n\nThis is a documentation-status correction only. It does **not** establish which license version applies to the pinned weights/ONNX artifacts, grant redistribution or commercial-use rights, or answer the other licensing questions in this report. Those questions remain open for the relevant license owner; neither the earlier reply nor this PR should be used as a substitute for that confirmation. No artifact re-upload is requested, and I am keeping this issue open.\n\n<!-- funasr-ops:issue3715-license-status-doc-followup-20260922 -->\n",
+  "created_at": "2026-09-22T06:10:00Z",
+  "updated_at": "2026-09-22T06:10:00Z",
+  "author_association": "COLLABORATOR",
+  "author": "LauraGPT"
+}

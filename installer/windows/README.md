@@ -16,11 +16,13 @@ python installer/windows/bundle.py --installer-dir outputs/windows-installer/rel
 
 私有 Python EXE 使用进程级 UTF-8 `activeCodePage` 清单，避免 SentencePiece／eSpeak 在中文安装路径下打不开资源。只修改包内两个解释器的资源清单，移除因此失效的原厂签名，记录修改前后摘要；不修改系统 Python、系统语言、模型和第三方 Python 库源码，也不提高运行权限。安装配置最低为 Windows 10 1903（18362），尚未证明所有支持版本均可用。
 
-模型仅从显式列出的已准备目录收集，排除候选模型、录音、导出及缓存。首次部署仍应核对上游许可。脚本生成 `payload-manifest.json` 与显式 `payload-files.iss`；Inno 只读取该文件清单，不会把之后生成的缓存或其他文件带入安装包。构建前应重新核验清单中的 SHA-256。
+普通话模型已换为 MyShell.ai MIT 许可的 MeloTTS INT8；更新旧环境先运行 `python experiments/offline-poc/prepare_models.py mandarin`，数据位于 `models/tts-zh/`，不自动回退到旧 Huayan 模型。模型仅从显式列出的已准备目录收集，排除候选模型、录音、导出及缓存。脚本生成 `payload-manifest.json` 与显式 `payload-files.iss`；Inno 只读取该文件清单，不会把之后生成的缓存或其他文件带入安装包。构建前应重新核验清单中的 SHA-256。
+
+基础识别改用 Apache-2.0 WenetSpeech-Yue U2++ INT8，旧环境先运行 `python experiments/offline-poc/prepare_models.py asr`，文件位于 `models/asr-wenet/`。当前 MODEL_DIRS 不含 SenseVoice 或旧 Huayan，模型许可检查可通过；许可全文、固定模型卡和证据随安装数据保存到 `docs/licenses/models/`。`--check-licenses` 可在不生成文件的情况下检查许可接线；`--private-development` 仍仅标记本地开发，不授予权利。bundle 拒绝缺少许可记录或记录过期的 payload，但尚不能证明 EXE/BIN 与传入 payload 的编译关系；必须重编并另验实际安装内容，不能仅给旧 BIN 增加外层 ZIP 告知便视为已修复。
 
 完整数据超过 Inno 单 EXE 的大小边界，必须使用 `/DSpanDisks`。每个 BIN 分卷上限为 1,500,000,000 字节，满足 GitHub Release 单附件小于 2 GiB 的限制。安装 EXE 和全部 `Setup-*.bin` 放在同一个文件夹中，直接运行 EXE，无需合并分卷；最终交付 ZIP 同时包含这些文件、使用说明及第三方告知文件。更改暂存路径时需同时设置编译宏 `PayloadDir` 和 `PayloadFileList`。
 
-向 Release 上传时分别选择 EXE、全部 BIN、校验清单，以及包含说明和许可证的小 ZIP；不要上传超过 2 GiB 的完整离线 ZIP。先保存为草稿，检查附件完整后再发布开发预览。源码检查通过不等于常规安装／卸载验收或模型再分发许可已通过。
+当前模型许可检查已通过；准备 Release 前仍须重新生成 payload、编译 EXE/BIN 并核验实际安装内容，不要上传旧 BIN。此轮源码修改没有重建旧安装包。源码检查通过不等于常规安装／卸载验收或完整公开发布批准。
 
 安装默认仅作用于当前用户，位置为 `%LOCALAPPDATA%\Programs\YuePuTranslate`；不要求管理员权限。开始菜单快捷方式使用私有 `pythonw.exe -I -B launch.py`，桌面快捷方式由用户主动选择。卸载只按 Inno 登记的文件清单移除程序及模型，不删除用户设置、密钥和手动保存的内容。自定义环境变量 `YUEPU_DATA_DIR` 仍优先，不迁移原源码模型。
 

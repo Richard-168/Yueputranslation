@@ -47,7 +47,7 @@ class OfflineRuntimeTest {
         assertTrue("Import the prepared Android model pack before this test", models.importer.ready())
         models.importer.verify()
         val cancelled = AtomicBoolean(false)
-        val engine = OfflineEngine(models.root)
+        val engine = OfflineEngine(models.root, context)
         val started = SystemClock.elapsedRealtime()
         try {
             engine.load(Direction.ZH_TO_YUE, cancelled) { }

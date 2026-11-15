@@ -42,7 +42,10 @@ def engine_check():
         player.chunks.clear()
         events = []
         request = Request(
-            1, "file", source=language, path=str(ROOT / f"models/asr/test_wavs/{language}.wav")
+            1,
+            "file",
+            source=language,
+            path=str(ROOT / f"models/asr-wenet/test_wavs/{language}.wav"),
         )
         job_start = time.perf_counter()
         engine.process(request, cancel, player, lambda key, value: events.append((key, value)))
@@ -92,7 +95,7 @@ def engine_check():
     ]
     assert not owned
     vad = make_vad()
-    samples, rate = sf.read(str(ROOT / "models/asr/test_wavs/yue.wav"), dtype="float32")
+    samples, rate = sf.read(str(ROOT / "models/asr-wenet/test_wavs/yue.wav"), dtype="float32")
     assert rate == 16000
     padded = np.concatenate([samples, np.zeros(16000, dtype=np.float32)])
     segments = []
@@ -113,7 +116,7 @@ def engine_check():
                 3,
                 "file",
                 source=source,
-                path=str(ROOT / "models/asr/test_wavs/en.wav"),
+                path=str(ROOT / "models/asr-wenet/test_wavs/en.wav"),
                 autoplay=False,
             ),
             threading.Event(),
@@ -122,37 +125,13 @@ def engine_check():
         )
         recognition = next(v for k, v in events if k == "recognition")
         original = next(v for k, v in events if k == "source")
-        assert recognition["language"] == "en" and "tribal chieftain" in original
+        assert recognition["language_detection"] is False and original.strip()
         assert any(k == "translation" and v["text"].strip() for k, v in events)
         language_checks.append(
             dict(fixture="en", direction=source, recognition=recognition, source_text=original)
         )
-        for fixture in ("ja", "ko"):
-            events = []
-            try:
-                engine.process(
-                    Request(
-                        4,
-                        "file",
-                        source=source,
-                        path=str(ROOT / f"models/asr/test_wavs/{fixture}.wav"),
-                        autoplay=False,
-                    ),
-                    threading.Event(),
-                    player,
-                    lambda key, value: events.append((key, value)),
-                )
-                raise AssertionError(
-                    f"Unsupported language reached translation: {fixture}/{source}"
-                )
-            except ValueError as exc:
-                assert "普通话、粤语或英文" in str(exc)
-            assert not any(k in {"source", "translation", "first_audio"} for k, v in events)
-            language_checks.append(
-                dict(fixture=fixture, direction=source, rejected_before_translation=True)
-            )
     short_segments = []
-    # Reproduce confusion from fixed real audio crops; no old output dependency.
+    # Short crops exercise bounded CTC input; this model has no audio LID output.
     crops = [
         ("zh", 1, 0.3),
         ("zh", 1.5, 0.3),
@@ -164,18 +143,19 @@ def engine_check():
         ("yue", 2, 0.5),
     ]
     for source, start, duration in crops:
-        samples, rate = sf.read(str(ROOT / f"models/asr/test_wavs/{source}.wav"), dtype="float32")
+        samples, rate = sf.read(
+            str(ROOT / f"models/asr-wenet/test_wavs/{source}.wav"), dtype="float32"
+        )
         samples = samples[int(start * rate) : int((start + duration) * rate)]
         stream = engine.asr.create_stream()
         stream.accept_waveform(rate, samples)
         engine.asr.decode_stream(stream)
-        assert stream.result.lang == "<|ja|>"
         row = dict(
             source=source,
             start=start,
             duration=duration,
             text=stream.result.text,
-            lang=stream.result.lang,
+            language_detection=False,
         )
         events = []
         try:
@@ -183,7 +163,10 @@ def engine_check():
                 samples, rate, threading.Event(), source, lambda k, v: events.append((k, v))
             )
             recognition = next(v for k, v in events if k == "recognition")
-            assert recognition["redirected"] and recognition["language"] in ASR_LANGUAGES
+            assert (
+                recognition["language_detection"] is False
+                and recognition["language"] in ASR_LANGUAGES
+            )
             assert not UNSUPPORTED_SCRIPT.search(text)
             result = dict(text=text, recognition=recognition)
         except ValueError as exc:
@@ -248,7 +231,9 @@ def playback_check():
     records = []
     try:
         for source in ("zh", "yue"):
-            audio, rate = sf.read(str(ROOT / f"models/asr/test_wavs/{source}.wav"), dtype="float32")
+            audio, rate = sf.read(
+                str(ROOT / f"models/asr-wenet/test_wavs/{source}.wav"), dtype="float32"
+            )
             for device_rate in (44100, 48000):
                 device_pcm = soxr.resample(audio, rate, device_rate).astype(np.float32)
                 device_pcm = np.concatenate(
@@ -305,7 +290,7 @@ def playback_check():
         # a consumer timeout must not manufacture time-sized blocks of silence.
         pieces = []
         paused = PlaybackProcessor(16000, 1, pieces.append)
-        source_audio, _ = sf.read(str(ROOT / "models/asr/test_wavs/yue.wav"), dtype="float32")
+        source_audio, _ = sf.read(str(ROOT / "models/asr-wenet/test_wavs/yue.wav"), dtype="float32")
         split = len(source_audio) // 2
         paused.feed(source_audio[:split, None])
         paused.flush()
@@ -411,7 +396,7 @@ def ui_check():
         screenshots.append(capture_window(root, "window-translated.png"))
         app.direction.set("普通话 → 粤语")
         app.update_options()
-        app.open_audio(ROOT / "models/asr/test_wavs/zh.wav")
+        app.open_audio(ROOT / "models/asr-wenet/test_wavs/zh.wav")
         pump_until(lambda: app.pending == 0 and app.last_translation[1] == "yue")
         assert app.player.chunks
         app.audio_source_box.set("设备播放声音")
@@ -427,7 +412,7 @@ def ui_check():
         app._buttons()
         assert str(app.auto_box["state"]) == "disabled"
         assert not app.submit(Request(app.epoch, "speak", source="zh", text="不可在设备收音中播报"))
-        samples, rate = sf.read(str(ROOT / "models/asr/test_wavs/zh.wav"), dtype="float32")
+        samples, rate = sf.read(str(ROOT / "models/asr-wenet/test_wavs/zh.wav"), dtype="float32")
         assert app.submit(
             Request(app.epoch, "audio", source="zh", samples=samples, rate=rate, autoplay=True)
         )

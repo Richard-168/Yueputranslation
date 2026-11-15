@@ -14,12 +14,10 @@ def recognizer(language=""):
         raise ValueError(
             "Only automatic, Mandarin, Cantonese and English recognition are supported"
         )
-    return sherpa_onnx.OfflineRecognizer.from_sense_voice(
-        model=str(MODELS / "asr/model.int8.onnx"),
-        tokens=str(MODELS / "asr/tokens.txt"),
+    return sherpa_onnx.OfflineRecognizer.from_wenet_ctc(
+        model=str(MODELS / "asr-wenet/model.int8.onnx"),
+        tokens=str(MODELS / "asr-wenet/tokens.txt"),
         num_threads=4,
-        language=language,
-        use_itn=True,
         provider="cpu",
     )
 
@@ -33,15 +31,19 @@ def canto_engine():
 def mandarin_engine():
     import sherpa_onnx
 
-    base = MODELS / "vits-piper-zh_CN-huayan-medium"
+    base = MODELS / "tts-zh"
     config = sherpa_onnx.OfflineTtsConfig(
         model=sherpa_onnx.OfflineTtsModelConfig(
             vits=sherpa_onnx.OfflineTtsVitsModelConfig(
-                model=str(base / "zh_CN-huayan-medium.onnx"), tokens=str(base / "tokens.txt")
+                model=str(base / "model.int8.onnx"),
+                tokens=str(base / "tokens.txt"),
+                lexicon=str(base / "lexicon.txt"),
+                dict_dir=str(base / "dict"),
             ),
             num_threads=4,
             provider="cpu",
-        )
+        ),
+        rule_fsts=",".join(str(base / name) for name in ("date.fst", "number.fst", "phone.fst")),
     )
     if not config.validate():
         raise RuntimeError("Mandarin TTS configuration invalid")

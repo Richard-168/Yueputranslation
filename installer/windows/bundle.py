@@ -7,10 +7,11 @@ import shutil
 import zipfile
 from pathlib import Path
 
-from payload import ROOT, sha256
+from payload import MODEL_DIRS, ROOT, review, sha256, verify_payload
 
 
-def bundle(directory, output, payload):
+def bundle(directory, output, payload, *, private_development=False):
+    review("windows", MODEL_DIRS, private_development=private_development)
     directory, output, payload = directory.resolve(), output.resolve(), payload.resolve()
     if not directory.is_relative_to(ROOT / "outputs") or not payload.is_relative_to(
         ROOT / "outputs"
@@ -19,6 +20,9 @@ def bundle(directory, output, payload):
     if output.exists() or not output.is_relative_to(ROOT / "outputs"):
         raise ValueError("Use a new ZIP path inside the project's outputs directory")
     manifest = json.loads((payload / "payload-manifest.json").read_text(encoding="utf-8"))
+    model_licenses = verify_payload(
+        manifest, "windows", MODEL_DIRS, private_development=private_development
+    )
     for name, record in manifest["files"].items():
         source = payload / name
         if not source.resolve().is_relative_to(payload) or source.is_symlink():
@@ -60,6 +64,13 @@ def bundle(directory, output, payload):
         target = directory / "licenses" / name
         shutil.copyfile(ROOT / "installer/windows/licenses" / name, target)
         license_targets.append(target)
+    for source in sorted((ROOT / "licenses/models").rglob("*")):
+        if not source.is_file() or source.is_symlink():
+            continue
+        target = directory / "licenses/models" / source.relative_to(ROOT / "licenses/models")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source, target)
+        license_targets.append(target)
     sources = [
         executable,
         *parts,
@@ -80,6 +91,7 @@ def bundle(directory, output, payload):
         installer_registration="unverified: automated environment denied writes; rolled back",
         runtime_evidence="Chinese-path model, font and launcher checks passed; synthetic muted audio",
         code_signing="unsigned",
+        model_licenses=model_licenses,
     )
     report_file = directory / "verification.json"
     report_file.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -108,5 +120,14 @@ if __name__ == "__main__":
     parser.add_argument("--installer-dir", type=Path, required=True)
     parser.add_argument("--payload", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--private-development", action="store_true")
+    parser.add_argument("--check-licenses", action="store_true")
     args = parser.parse_args()
-    bundle(args.installer_dir, args.output, args.payload)
+    if args.check_licenses:
+        print(
+            json.dumps(review("windows", MODEL_DIRS, private_development=args.private_development))
+        )
+        raise SystemExit(0)
+    bundle(
+        args.installer_dir, args.output, args.payload, private_development=args.private_development
+    )

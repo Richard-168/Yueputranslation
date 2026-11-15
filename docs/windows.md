@@ -2,6 +2,10 @@
 
 按根目录 README 准备 Python 环境和模型后，双击 `Start-YuePu.cmd`。在左侧控制台点击“加载离线模型”，等待加载及预热完成后，同一位置会显示收音按钮。
 
+普通话译音使用 MeloTTS INT8。旧环境升级后先运行 `python experiments/offline-poc/prepare_models.py mandarin`，将固定模型和字典准备到 `models/tts-zh/`。旧 Huayan 音色缓存不自动删除，也不会继续用于运行或新安装数据。
+
+基础识别已改用 WenetSpeech-Yue U2++ CTC；旧环境还需运行 `python experiments/offline-poc/prepare_models.py asr`，准备 `models/asr-wenet/`。它不提供自动语种判断，请主动选择粤普方向；短音频和其他语言音频仍可能误识别。
+
 右上角“深色 / 浅色”可随时切换外观，下次启动会记住选择。主题同时应用于字幕、输入框、状态提示及设置对话框；切换时保留本次字幕、选中记录和回看位置。小窗口中的左侧设置可独立滚动，开始和停止按钮固定在底部。
 
 1. 选择方向：粤语 → 普通话，或普通话 → 粤语。

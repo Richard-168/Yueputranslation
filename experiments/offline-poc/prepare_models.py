@@ -6,7 +6,6 @@ import argparse
 import concurrent.futures
 import hashlib
 import json
-import tarfile
 import time
 import urllib.parse
 import urllib.request
@@ -22,13 +21,14 @@ SOURCES = {
     "song-asr-large": ("ggml-org/Qwen3-ASR-1.7B-GGUF", "36a678687ba7d07a74ca70ccb0e36902e005fb80"),
     "song-asr": ("ggml-org/Qwen3-ASR-0.6B-GGUF", "928ab958557df9aa2ef1c93e0e83c7ad0933fae2"),
     "asr": (
-        "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
-        "2365baeacb507f821a0c8120fcee3d484dba7a07",
+        "csukuangfj/sherpa-onnx-wenetspeech-yue-u2pp-conformer-ctc-zh-en-cantonese-int8-2025-09-10",
+        "c911764e8227cf372ee60adc75f7f407e5b8c905",
     ),
     "canto": ("typangaa/canto-tts-nano", "fe17418a293d9be85685ddf750b0cfef9c88abb4"),
     "llm": ("Qwen/Qwen3-1.7B-GGUF", "90862c4b9d2787eaed51d12237eafdfe7c5f6077"),
     "hymt": ("tencent/HY-MT1.5-1.8B-GGUF", "265b2e615a7dc9b06c435dc878829ad99a512ba2"),
     "hymt2": ("tencent/Hy-MT2-1.8B-GGUF", "a0c709d9fac510f2c807aa3af52872340dc37a4a"),
+    "mandarin": ("csukuangfj/vits-melo-tts-zh_en", "a0d5c6a264c0ef92d70d8661d8cc502d79627cd6"),
 }
 
 
@@ -99,6 +99,22 @@ def hf_specs(component: str) -> list[dict]:
     result = []
     for item in metadata["siblings"]:
         name = item["rfilename"]
+        if component == "mandarin" and not (
+            name
+            in {
+                "model.int8.onnx",
+                "tokens.txt",
+                "lexicon.txt",
+                "date.fst",
+                "number.fst",
+                "phone.fst",
+                "LICENSE",
+                "README.md",
+                "dict/README.md",
+            }
+            or (name.startswith("dict/") and name.endswith(".utf8"))
+        ):
+            continue
         if component == "song-asr-large" and name not in {
             "Qwen3-ASR-1.7B-Q8_0.gguf",
             "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf",
@@ -129,22 +145,24 @@ def hf_specs(component: str) -> list[dict]:
             "tokens.txt",
             "LICENSE",
             "README.md",
-            "test_wavs/yue.wav",
+            "test_wavs/yue-0.wav",
+            "test_wavs/yue-1.wav",
             "test_wavs/zh.wav",
             "test_wavs/en.wav",
-            "test_wavs/ja.wav",
-            "test_wavs/ko.wav",
         }:
             continue
         if name.endswith(".gitattributes"):
             continue
+        local_name = (
+            "test_wavs/yue.wav" if component == "asr" and name == "test_wavs/yue-0.wav" else name
+        )
         result.append(
             {
                 "component": component,
                 "repo": repo,
                 "revision": revision,
                 "url": f"https://huggingface.co/{repo}/resolve/{revision}/{urllib.parse.quote(name)}",
-                "local_path": f"models/{component}/{name}",
+                "local_path": f"models/{'tts-zh' if component == 'mandarin' else 'asr-wenet' if component == 'asr' else component}/{local_name}",
                 "size": item["size"],
                 "sha256": item.get("lfs", {}).get("sha256"),
                 "git_sha1": item.get("blobId"),
@@ -156,7 +174,7 @@ def hf_specs(component: str) -> list[dict]:
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "components", nargs="+", choices=[*SOURCES, "runtime", "mandarin", "vad", "song-separator"]
+        "components", nargs="+", choices=[*SOURCES, "runtime", "vad", "song-separator"]
     )
     args = parser.parse_args()
     ROOT.mkdir(parents=True, exist_ok=True)
@@ -183,17 +201,6 @@ def main():
                     "local_path": "models/vad/silero_vad.onnx",
                     "size": 643854,
                     "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
-                }
-            )
-            continue
-        if component == "mandarin":
-            specs.append(
-                {
-                    "component": "mandarin",
-                    "revision": "tts-models",
-                    "url": "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/vits-piper-zh_CN-huayan-medium.tar.bz2",
-                    "local_path": "downloads/vits-piper-zh_CN-huayan-medium.tar.bz2",
-                    "size": 67255926,
                 }
             )
             continue
@@ -252,44 +259,6 @@ def main():
                 if not (target / item.filename).resolve().is_relative_to(target):
                     raise RuntimeError("Archive path escapes runtime directory")
             archive.extractall(target)
-    if "mandarin" in args.components:
-        target = ROOT / "models"
-        with tarfile.open(
-            ROOT / "downloads/vits-piper-zh_CN-huayan-medium.tar.bz2", "r:bz2"
-        ) as archive:
-            archive.extractall(target, filter="data")
-        repo = "csukuangfj/vits-piper-zh_CN-huayan-medium"
-        revision = "8baec97632a57257b09073b7986f4d319efdc29a"
-        metadata = get_json(
-            f"https://huggingface.co/api/models/{repo}/revision/{revision}?blobs=true"
-        )
-        checks = []
-        for item in metadata["siblings"]:
-            if item["rfilename"] not in {
-                "zh_CN-huayan-medium.onnx",
-                "tokens.txt",
-                "MODEL_CARD",
-                "espeak-ng-data/cmn_dict",
-                "espeak-ng-data/phontab",
-                "espeak-ng-data/phondata",
-                "espeak-ng-data/phonindex",
-            }:
-                continue
-            spec = {
-                "size": item["size"],
-                "sha256": item.get("lfs", {}).get("sha256"),
-                "git_sha1": item.get("blobId"),
-            }
-            path = target / "vits-piper-zh_CN-huayan-medium" / item["rfilename"]
-            if not valid(path, spec):
-                raise RuntimeError(
-                    f"Mandarin archive differs from pinned model snapshot: {item['rfilename']}"
-                )
-            checks.append({"file": item["rfilename"], "sha256": sha256(path)})
-        (output_dir / "mandarin-snapshot-checks.json").write_text(
-            json.dumps({"repo": repo, "revision": revision, "checks": checks}, indent=2),
-            encoding="utf-8",
-        )
     print("Prepared and verified requested assets.", flush=True)
 
 

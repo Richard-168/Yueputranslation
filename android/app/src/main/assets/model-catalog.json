@@ -1,16 +1,16 @@
 {
   "format": 1,
-  "profile": "android-offline-dev-v1",
+  "profile": "android-offline-wenet-system-yue-v2",
   "files": [
     {
       "path": "asr/model.int8.onnx",
-      "size": 239233841,
-      "sha256": "c71f0ce00bec95b07744e116345e33d8cbbe08cef896382cf907bf4b51a2cd51"
+      "size": 134698500,
+      "sha256": "201bfd9e12ec4ac9ee3b23c5e071d9fa2381a8b21df317e2e08a170d6f1f55d3"
     },
     {
       "path": "asr/tokens.txt",
-      "size": 315894,
-      "sha256": "f449eb28dc567533d7fa59be34e2abca8784f771850c78a47fb731a31429a1dc"
+      "size": 85361,
+      "sha256": "c7750677a1183606d2fd6f16d792e06e70d9843dba8a0c6e23a9dec78e06977a"
     },
     {
       "path": "translation/model.gguf",
@@ -93,35 +93,75 @@
       "sha256": "d18664a7e12bd7ea1022ddaf951e534e136815016c5a809d6b64156bffb4369d"
     },
     {
-      "path": "tts-yue/lexicon.txt",
-      "size": 294061,
-      "sha256": "337845cd7ea6221e69684329beda84198dc8678699a4936670a08a9449c84acb"
-    },
-    {
-      "path": "tts-yue/rule.fst",
-      "size": 64482,
-      "sha256": "743f402181fcfebf76cc2f0546b71fa26476e626fbe4e460fb7b4c3a7a8bd5bd"
-    },
-    {
-      "path": "tts-yue/tokens.txt",
-      "size": 529,
-      "sha256": "e6c853092480206c9611101c1eb82d930f07d79e1d399bf9ca5b6acfaf443af3"
-    },
-    {
-      "path": "tts-yue/model.onnx",
-      "size": 114059955,
-      "sha256": "7d8d4f5550b607999417a99131b034c8cc2b8dca69f9e9fdefeff6655643c139"
-    },
-    {
       "path": "vad/silero_vad.onnx",
       "size": 643854,
       "sha256": "9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6"
+    },
+    {
+      "path": "licenses/models/Apache-2.0.txt",
+      "size": 11358,
+      "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+    },
+    {
+      "path": "licenses/models/CppJieba-MIT.txt",
+      "size": 1066,
+      "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0"
+    },
+    {
+      "path": "licenses/models/Hy-MT2-Apache-2.0.txt",
+      "size": 11639,
+      "sha256": "a1d52d448f81c584a47c583e19dfab2d3851c7c84431b07baee093c1113ed114"
+    },
+    {
+      "path": "licenses/models/Hy-MT2-README.md",
+      "size": 15305,
+      "sha256": "6811073b8b3d20a9a4db959c2b3f36e39e66bdb953cfecbdd8223fc20cc9a05b"
+    },
+    {
+      "path": "licenses/models/Jieba-MIT.txt",
+      "size": 1075,
+      "sha256": "18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37"
+    },
+    {
+      "path": "licenses/models/MeloTTS-MIT.txt",
+      "size": 1053,
+      "sha256": "88a50e5a02bbc2a5c2f084dc19da751aa97b1690f5fda76cd8005c8634d1ca70"
+    },
+    {
+      "path": "licenses/models/MeloTTS-README.md",
+      "size": 257,
+      "sha256": "ae6e44dead53dfdbd5b4a77106226f3118eb910222b46cb5533a3860773fc6c7"
+    },
+    {
+      "path": "licenses/models/Silero-VAD-v4-MIT.txt",
+      "size": 1075,
+      "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+    },
+    {
+      "path": "licenses/models/WSYue-ASR-README.md",
+      "size": 7822,
+      "sha256": "6c618e2068edff462bb78437de43ffbf372ac97cb748d60816ba2beeef25b2ef"
+    },
+    {
+      "path": "licenses/models/Wenet-Yue-ONNX-README.md",
+      "size": 129,
+      "sha256": "bb7e32790a78c1832c6e8eda7199d70591e9fe3d677be52d40722062a3023d36"
+    },
+    {
+      "path": "licenses/models/registry.json",
+      "size": 8516,
+      "sha256": "5cdc86b74afecf8feb0a5136c05c684b0dedda27d53dcc9d9ce91ca90aaa93d4"
+    },
+    {
+      "path": "licenses/models/sources.json",
+      "size": 5873,
+      "sha256": "89b744f77bbbee11ea41018bae7e6614420b452ecb128c37bb5dbdfcab82cbb5"
     }
   ],
   "sources": {
     "asr": [
-      "csukuangfj/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-2024-07-17",
-      "2365baeacb507f821a0c8120fcee3d484dba7a07"
+      "csukuangfj/sherpa-onnx-wenetspeech-yue-u2pp-conformer-ctc-zh-en-cantonese-int8-2025-09-10",
+      "c911764e8227cf372ee60adc75f7f407e5b8c905"
     ],
     "translation": [
       "tencent/Hy-MT2-1.8B-GGUF",
@@ -130,11 +170,100 @@
     "tts-zh": [
       "csukuangfj/vits-melo-tts-zh_en",
       "a0d5c6a264c0ef92d70d8661d8cc502d79627cd6"
-    ],
-    "tts-yue": [
-      "csukuangfj/vits-cantonese-hf-xiaomaiiwn",
-      "27e0da148bbe6c120107c0d6d01c218337f803e8"
     ]
   },
-  "redistribution": "Cantonese VITS voice license unverified; private development only"
+  "cantonese_speech": "Installed offline system Cantonese voice required; no Cantonese weights bundled",
+  "redistribution": "public-model-permissions-reviewed",
+  "model_licenses": {
+    "format": 1,
+    "profile": "android",
+    "mode": "public",
+    "public_redistribution": true,
+    "registry_sha256": "5cdc86b74afecf8feb0a5136c05c684b0dedda27d53dcc9d9ce91ca90aaa93d4",
+    "models": {
+      "asr-wenet": {
+        "status": "approved",
+        "license": "Apache-2.0",
+        "source": "ASLP-lab/WSYue-ASR u2pp_conformer_yue; csukuangfj/sherpa-onnx conversion",
+        "revision": "c911764e8227cf372ee60adc75f7f407e5b8c905",
+        "upstream_revision": "4a74a91430485d7456cb786f1d0ff0aba1185ded",
+        "reason": "Independent U2++ Conformer checkpoint, not the SenseVoice-derived checkpoint in the same collection. Preserve Apache license, original model card and conversion attribution.",
+        "artifact_sha256": {
+          "model.int8.onnx": "201bfd9e12ec4ac9ee3b23c5e071d9fa2381a8b21df317e2e08a170d6f1f55d3",
+          "tokens.txt": "c7750677a1183606d2fd6f16d792e06e70d9843dba8a0c6e23a9dec78e06977a"
+        },
+        "evidence": [
+          {
+            "file": "Apache-2.0.txt",
+            "sha256": "cfc7749b96f63bd31c3c42b5c471bf756814053e847c10f3eb003417bc523d30"
+          },
+          {
+            "file": "WSYue-ASR-README.md",
+            "sha256": "6c618e2068edff462bb78437de43ffbf372ac97cb748d60816ba2beeef25b2ef"
+          },
+          {
+            "file": "Wenet-Yue-ONNX-README.md",
+            "sha256": "bb7e32790a78c1832c6e8eda7199d70591e9fe3d677be52d40722062a3023d36"
+          }
+        ]
+      },
+      "hymt2": {
+        "status": "approved",
+        "license": "Apache-2.0",
+        "source": "tencent/Hy-MT2-1.8B-GGUF",
+        "revision": "a0c709d9fac510f2c807aa3af52872340dc37a4a",
+        "reason": "Retain Tencent license and model card; indicate modifications if any.",
+        "evidence": [
+          {
+            "file": "Hy-MT2-Apache-2.0.txt",
+            "sha256": "a1d52d448f81c584a47c583e19dfab2d3851c7c84431b07baee093c1113ed114"
+          },
+          {
+            "file": "Hy-MT2-README.md",
+            "sha256": "6811073b8b3d20a9a4db959c2b3f36e39e66bdb953cfecbdd8223fc20cc9a05b"
+          }
+        ]
+      },
+      "vad": {
+        "status": "approved",
+        "license": "MIT",
+        "source": "snakers4/silero-vad; k2-fsa/sherpa-onnx conversion",
+        "revision": "sha256:9e2449e1087496d8d4caba907f23e0bd3f78d91fa552479bb9c23ac09cbb1fd6",
+        "reason": "Retain Silero Team copyright and MIT notice; converted v4 16kHz artifact.",
+        "evidence": [
+          {
+            "file": "Silero-VAD-v4-MIT.txt",
+            "sha256": "2e63e9a38b6e8fc0c7bc37ce174caca1862870856c6daf5697cfb785e925520b"
+          }
+        ]
+      },
+      "tts-zh": {
+        "status": "approved",
+        "license": "MIT",
+        "source": "csukuangfj/vits-melo-tts-zh_en; MyShell.ai",
+        "revision": "a0d5c6a264c0ef92d70d8661d8cc502d79627cd6",
+        "reason": "Retain MyShell.ai MIT license and model card; include dictionary notices.",
+        "evidence": [
+          {
+            "file": "MeloTTS-MIT.txt",
+            "sha256": "88a50e5a02bbc2a5c2f084dc19da751aa97b1690f5fda76cd8005c8634d1ca70"
+          },
+          {
+            "file": "MeloTTS-README.md",
+            "sha256": "ae6e44dead53dfdbd5b4a77106226f3118eb910222b46cb5533a3860773fc6c7"
+          },
+          {
+            "file": "CppJieba-MIT.txt",
+            "sha256": "ba898a14f729ba5e9965da34e3eecd5edd3795f2cc5d7c923b815ba79bb851b0"
+          },
+          {
+            "file": "Jieba-MIT.txt",
+            "sha256": "18ba0984839f85853b29fadaf992f7dba8fd0ca0fbeae34de2b8735222dc7a37"
+          }
+        ]
+      }
+    },
+    "blockers": [],
+    "disclaimer": "Model permission evidence only, not full software release approval. Private development is not a grant of rights."
+  }
 }

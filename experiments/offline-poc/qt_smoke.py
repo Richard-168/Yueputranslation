@@ -180,7 +180,7 @@ def main():
         window._buttons()
         assert not window.auto_box.isEnabled()
         assert not window.submit(Request(window.epoch, "speak", text="禁止播报"))
-        samples, rate = sf.read(str(ROOT / "models/asr/test_wavs/yue.wav"), dtype="float32")
+        samples, rate = sf.read(str(ROOT / "models/asr-wenet/test_wavs/yue.wav"), dtype="float32")
         assert window.submit(
             Request(window.epoch, "audio", source="yue", samples=samples, rate=rate, autoplay=True)
         )

@@ -54,7 +54,10 @@ def run_asr():
     load_seconds = time.perf_counter() - started
     rows = []
     for language in ("yue", "zh"):
-        row = {"language": language, **transcribe(engine, MODELS / f"asr/test_wavs/{language}.wav")}
+        row = {
+            "language": language,
+            **transcribe(engine, MODELS / f"asr-wenet/test_wavs/{language}.wav"),
+        }
         if not row["text"].strip():
             raise RuntimeError("ASR returned empty text")
         rows.append(row)
@@ -75,17 +78,13 @@ def synthesize(engine, language, text, name):
         engine.synthesize(text, str(path), max_new_frames=200)
     else:
         import sherpa_onnx
-        from piper_phonemize import phonemize_espeak
 
         config = sherpa_onnx.GenerationConfig()
         config.sid = 0
         config.speed = 1.0
-        config.phoneme_codepoints = [
-            [ord(c) for c in sentence] for sentence in phonemize_espeak(text, engine.lang or "cmn")
-        ]
-        audio = engine.generate("", config)
+        audio = engine.generate(text, config)
         if audio.sample_rate <= 0 or len(audio.samples) == 0:
-            raise RuntimeError("Mandarin model produced no audio after phonemization")
+            raise RuntimeError("Mandarin model produced no audio")
         sf.write(str(path), audio.samples, audio.sample_rate, subtype="PCM_16")
     elapsed = time.perf_counter() - started
     info = sf.info(str(path))

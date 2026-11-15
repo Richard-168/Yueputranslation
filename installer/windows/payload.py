@@ -19,12 +19,15 @@ from packaging.utils import canonicalize_name
 from windows_host import patch_host
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / "tools"))
+from model_licenses import review, verify_artifacts, verify_payload  # noqa: E402, F401
+
 MODEL_DIRS = (
-    "asr",
+    "asr-wenet",
     "canto",
     "hymt2",
     "vad",
-    "vits-piper-zh_CN-huayan-medium",
+    "tts-zh",
     "song-asr-large",
     "song-separator",
 )
@@ -97,7 +100,8 @@ def apply_runtime_patches(output):
     return [patch_host(output / "python" / name) for name in ("python.exe", "pythonw.exe")]
 
 
-def build(output, data):
+def build(output, data, *, private_development=False):
+    model_licenses = review("windows", MODEL_DIRS, private_development=private_development)
     if sys.version_info[:2] != (3, 12) or struct.calcsize("P") != 8 or sys.platform != "win32":
         raise ValueError("Build with the tested Windows x64 Python 3.12 environment")
     output = output.resolve()
@@ -193,6 +197,7 @@ def build(output, data):
     copy(ROOT / "installer/windows/launcher.py", "launch.py")
     for name in MODEL_DIRS:
         print("Collecting model", name, flush=True)
+        verify_artifacts(model_licenses["models"][name], data / "models" / name)
         tree(
             data / "models" / name,
             Path("data/models") / name,
@@ -232,6 +237,7 @@ def build(output, data):
         packages=packages,
         runtime_patches=patches,
         files=files,
+        model_licenses=model_licenses,
     )
     (output / "payload-manifest.json").write_text(
         json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -251,5 +257,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data", type=Path, default=ROOT / "experiments/offline-poc")
+    parser.add_argument(
+        "--private-development",
+        action="store_true",
+        help="Local testing only; no public model rights",
+    )
+    parser.add_argument(
+        "--check-licenses", action="store_true", help="Check model permissions without writing"
+    )
     args = parser.parse_args()
-    build(args.output, args.data.resolve())
+    if args.check_licenses:
+        print(
+            json.dumps(review("windows", MODEL_DIRS, private_development=args.private_development))
+        )
+        raise SystemExit(0)
+    build(args.output, args.data.resolve(), private_development=args.private_development)

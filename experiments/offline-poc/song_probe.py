@@ -111,7 +111,7 @@ def main():
             engine.decode_stream(stream)
             row["sensevoice"][lang or "auto"] = dict(
                 text=stream.result.text,
-                language=stream.result.lang,
+                language_detection=False,
                 event=stream.result.event,
                 seconds=time.perf_counter() - tick,
             )
@@ -139,7 +139,7 @@ def main():
         tick = time.perf_counter()
         engine.decode_stream(stream)
         previous = dict(
-            text=stream.result.text, language=stream.result.lang, seconds=time.perf_counter() - tick
+            text=stream.result.text, language_detection=False, seconds=time.perf_counter() - tick
         )
         candidate = qwen(path)
         records.append(

@@ -27,7 +27,12 @@ sherpa-onnx、ONNX Runtime、Canto-TTS、Canto-HK-G2P 等组件的许可
 原始及修改后摘要记在 payload-manifest.json，操作见 windows_host.py。
 
 离线模型来源和各自许可见安装目录 docs/THIRD_PARTY.md 和 data/models。
-包含的可选 Kim_Vocal_2 模型尚需在公开再分发前核实授权；当前仅用于本地验证。
+Kim_Vocal_2 作者 Kimberley Jensen 已于 2026-04-22 明确授权 MIT；
+署名、标准 MIT 告知及作者许可记录见 docs/licenses/models/。
+普通话已改用 MyShell.ai MeloTTS（MIT），不再内置授权不明的 Huayan 音色。
+基础识别已改为 ASLP-lab WenetSpeech-Yue U2++ Conformer CTC INT8（Apache-2.0），
+保留原作者模型卡、转换来源和许可。新安装数据不含 SenseVoice 或旧 Huayan 权重。
+本告知不替代整个安装包的发布验收。完整状态见 docs/THIRD_PARTY.md。
 联网功能默认关闭，使用者自行提供账号密钥并承担服务费用，安装包不含密钥。
 
 本项目原创代码许可见安装目录 docs/LICENSE。
