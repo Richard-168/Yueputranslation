@@ -1,0 +1,33 @@
+粤普同传 Windows 开发预览：第三方告知
+
+本文件及 licenses 文件夹与安装 EXE／数据文件一起交付，请一并保留。
+本包为本地开发预览，尚未完成公开再分发许可核验。
+
+Qt / PySide6 / Shiboken 6.8.3
+版权：The Qt Company Ltd. 及其贡献者。
+所用 Python 绑定的包元数据声明 LGPL-3.0-only OR GPL-2.0-only OR GPL-3.0-only。
+相应许可全文附于 licenses/。本包以独立 DLL／Python 模块形式保留组件，
+不对用户为修改这些库而进行的调试或替换添加项目方限制。
+对应源码：
+https://code.qt.io/cgit/pyside/pyside-setup.git/tag/?h=v6.8.3
+https://download.qt.io/official_releases/QtForPython/pyside6/PySide6-6.8.3-src/
+https://download.qt.io/archive/qt/6.8/6.8.3/single/
+第三方模型及库不因本项目的 MIT 许可而改用 MIT。
+
+Python 3.12.10 的完整许可随程序保存在 python/LICENSE.txt。
+llama.cpp b12314 的 MIT 告知全文见 licenses/llama.cpp-MIT.txt；
+LLVM OpenMP 告知位于 data/runtime/llama-b12314/LICENSE-LLVM-OpenMP。
+sherpa-onnx、ONNX Runtime、Canto-TTS、Canto-HK-G2P 等组件的许可
+随各自安装目录和包元数据保留；固定依赖版本详见 payload-manifest.json。
+
+本包为私有 Python 进程启用 Windows UTF-8 activeCodePage 清单，
+修复上游原生组件读取中文安装路径失败。修改仅作用于包内两个 Python EXE，
+不会修改系统 Python、系统语言、模型或上游库源码，也不请求管理员权限。
+由于可执行文件资源已修改，原厂数字签名已移除，不能视为 PSF 签名版本。
+原始及修改后摘要记在 payload-manifest.json，操作见 windows_host.py。
+
+离线模型来源和各自许可见安装目录 docs/THIRD_PARTY.md 和 data/models。
+包含的可选 Kim_Vocal_2 模型尚需在公开再分发前核实授权；当前仅用于本地验证。
+联网功能默认关闭，使用者自行提供账号密钥并承担服务费用，安装包不含密钥。
+
+本项目原创代码许可见安装目录 docs/LICENSE。

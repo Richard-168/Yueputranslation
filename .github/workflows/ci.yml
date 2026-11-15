@@ -29,6 +29,8 @@ jobs:
         run: python -m ruff format --check .
       - name: Model-free regression checks
         run: python -m unittest discover -s tests -v
+      - name: Windows packaging boundary checks
+        run: python -m unittest discover -s installer/windows/tests -v
       - name: CLI entry
         run: python -m yuepu_translate --help
       - name: Build source and wheel packages
