@@ -2,9 +2,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from yuepu_translate.paths import data_dir
 
@@ -30,6 +31,46 @@ class EntryTests(unittest.TestCase):
         )
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertIn("--muted", result.stdout)
+
+    def test_help_is_utf8_when_redirected_from_a_legacy_code_page(self):
+        for encoding in ["cp1252", "ascii"]:
+            with self.subTest(encoding=encoding):
+                result = subprocess.run(
+                    [sys.executable, "-m", "yuepu_translate", "--help"],
+                    env=dict(os.environ, PYTHONIOENCODING=f"{encoding}:strict", PYTHONUTF8="0"),
+                    capture_output=True,
+                    encoding="utf-8",
+                    timeout=15,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertIn("粤普双向翻译", result.stdout)
+                self.assertIn("生成译音但不播放", result.stdout)
+
+    def test_chinese_argument_error_is_utf8_on_a_legacy_code_page(self):
+        result = subprocess.run(
+            [sys.executable, "-m", "yuepu_translate", "--不存在的参数"],
+            env=dict(os.environ, PYTHONIOENCODING="cp1252:strict", PYTHONUTF8="0"),
+            capture_output=True,
+            encoding="utf-8",
+            timeout=15,
+        )
+        self.assertEqual(result.returncode, 2, result.stderr)
+        self.assertIn("--不存在的参数", result.stderr)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_gui_entry_accepts_missing_standard_streams(self):
+        from yuepu_translate.cli import main
+
+        window = types.ModuleType("yuepu_translate.desktop_qt")
+        window.main = Mock()
+        with (
+            patch.dict(sys.modules, {window.__name__: window}),
+            patch.object(sys, "stdout", None),
+            patch.object(sys, "stderr", None),
+            patch.object(sys, "argv", ["yuepu-translate", "--muted"]),
+        ):
+            main()
+        window.main.assert_called_once_with(muted=True)
 
     def test_invalid_option_fails_before_loading_models(self):
         result = subprocess.run(
