@@ -35,7 +35,8 @@ LZMAUseSeparateProcess=yes
 SolidCompression=yes
 #ifdef SpanDisks
 DiskSpanning=yes
-DiskSliceSize=max
+; Keep every data slice below GitHub Releases' 2 GiB asset limit.
+DiskSliceSize=1500000000
 #endif
 CloseApplications=yes
 RestartApplications=no

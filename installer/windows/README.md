@@ -18,7 +18,9 @@ python installer/windows/bundle.py --installer-dir outputs/windows-installer/rel
 
 模型仅从显式列出的已准备目录收集，排除候选模型、录音、导出及缓存。首次部署仍应核对上游许可。脚本生成 `payload-manifest.json` 与显式 `payload-files.iss`；Inno 只读取该文件清单，不会把之后生成的缓存或其他文件带入安装包。构建前应重新核验清单中的 SHA-256。
 
-完整数据超过 Inno 单 EXE 的大小边界，必须使用 `/DSpanDisks`。安装器和 `Setup-1.bin` 放在同一个文件夹中；最终交付 ZIP 同时包含两者、使用说明及第三方告知文件。更改暂存路径时需同时设置编译宏 `PayloadDir` 和 `PayloadFileList`。
+完整数据超过 Inno 单 EXE 的大小边界，必须使用 `/DSpanDisks`。每个 BIN 分卷上限为 1,500,000,000 字节，满足 GitHub Release 单附件小于 2 GiB 的限制。安装 EXE 和全部 `Setup-*.bin` 放在同一个文件夹中，直接运行 EXE，无需合并分卷；最终交付 ZIP 同时包含这些文件、使用说明及第三方告知文件。更改暂存路径时需同时设置编译宏 `PayloadDir` 和 `PayloadFileList`。
+
+向 Release 上传时分别选择 EXE、全部 BIN、校验清单，以及包含说明和许可证的小 ZIP；不要上传超过 2 GiB 的完整离线 ZIP。先保存为草稿，检查附件完整后再发布开发预览。源码检查通过不等于常规安装／卸载验收或模型再分发许可已通过。
 
 安装默认仅作用于当前用户，位置为 `%LOCALAPPDATA%\Programs\YuePuTranslate`；不要求管理员权限。开始菜单快捷方式使用私有 `pythonw.exe -I -B launch.py`，桌面快捷方式由用户主动选择。卸载只按 Inno 登记的文件清单移除程序及模型，不删除用户设置、密钥和手动保存的内容。自定义环境变量 `YUEPU_DATA_DIR` 仍优先，不迁移原源码模型。
 
