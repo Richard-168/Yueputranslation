@@ -22,3 +22,16 @@ Python 直接依赖在 `pyproject.toml` 中声明，包括 Qt / PySide6、sherpa
 诊断脚本还可使用 Qwen3、Qwen3-ASR 0.6B、旧版 HY-MT 等候选。候选许可也不由默认模型或本项目的许可替代。用户录音、音乐和歌词不属于本项目源码授权范围，不作为测试资产发布。
 
 可选联网增强调用阿里云百炼的 [Qwen3-ASR-Flash](https://help.aliyun.com/zh/model-studio/qwen-asr-api-reference) 和 [Qwen-MT-Flash](https://help.aliyun.com/zh/model-studio/qwen-mt-api)，不分发云端模型权重，不使用项目方共享密钥。用户自行提供相应地域的账号密钥并承担费用；可用性、内容处理与计费遵循服务商协议，不受本仓库 MIT 许可替代。
+
+## Android 开发预览
+
+Android APK 编译包含 [sherpa-onnx 2.0.1](https://github.com/k2-fsa/sherpa-onnx/releases/tag/v2.0.1)（Apache-2.0）、其 ONNX Runtime（MIT）、[llama.cpp](https://github.com/ggml-org/llama.cpp/tree/e1f7593c32e8dd782fc7addb908d0911260511ae)（MIT，固定上述提交）、Kotlin 2.1.20 标准库（Apache-2.0）及 NDK 27.2 C++ 运行库。随 APK 保存的告知文件位于 `android/app/src/main/assets/licenses/`。Gradle Wrapper 8.11.1 使用 Apache-2.0，构建工具不属于手机模型包。以上告知不构成完整公开发布审计。
+
+Android ASR／MT／VAD 复用表内固定资源；手机播报另外使用：
+
+| 模型 | 固定修订 |
+| --- | --- |
+| [vits-melo-tts-zh_en](https://huggingface.co/csukuangfj/vits-melo-tts-zh_en) | `a0d5c6a264c0ef92d70d8661d8cc502d79627cd6`，INT8 |
+| [vits-cantonese-hf-xiaomaiiwn](https://huggingface.co/csukuangfj/vits-cantonese-hf-xiaomaiiwn) | `27e0da148bbe6c120107c0d6d01c218337f803e8` |
+
+权重不随源码或 APK 分发，由开发工具生成本地 ZIP；大小和 SHA-256 固定在 APK 校验清单中。**粤语 VITS 候选尚缺完整、已核实的模型授权材料，当前仅用于本地技术验证，解决或更换前不得公开再分发该模型包。** 普通话模型、字典、规则文件和其余权重的安装包分发条件也需在公开发布前逐项核对。

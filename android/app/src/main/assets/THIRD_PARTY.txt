@@ -1,0 +1,18 @@
+YuePuTranslate Android 0.1.0-dev — private development preview
+
+Original application: MIT, see the repository LICENSE.
+llama.cpp b12314 / e1f7593c32e8dd782fc7addb908d0911260511ae: MIT.
+sherpa-onnx 2.0.1 Android AAR: Apache-2.0.
+ONNX Runtime (included by the sherpa-onnx AAR): MIT.
+Kotlin 2.1.20 standard library: Apache-2.0.
+Android NDK 27.2.12479018 C++ runtime: LLVM notices in licenses/NDK-toolchain-NOTICE.txt.
+License texts are included in assets/licenses/ and linked from the repository THIRD_PARTY.md.
+
+Models are imported separately and are not embedded in the APK:
+SenseVoice-Small INT8, Hy-MT2-1.8B Q4_K_M, Silero VAD,
+csukuangfj/vits-melo-tts-zh_en, csukuangfj/vits-cantonese-hf-xiaomaiiwn.
+Exact revisions and artifact hashes are recorded in model-catalog.json and the model preparation script.
+These model weights have separate licensing conditions.
+The Cantonese TTS candidate lacks a complete verified model license record.
+This development model pack must not be publicly redistributed pending resolution or replacement.
+This preview is not a public-distribution licensing audit.

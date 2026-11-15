@@ -1,0 +1,4 @@
+<resources>
+    <color name="launcher_background">#121617</color>
+    <string name="caption_heading">%1$s · %2$s</string>
+</resources>
