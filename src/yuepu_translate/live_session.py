@@ -45,15 +45,15 @@ class LiveSession:
     """One ASR owner and one bounded translation/TTS lane per capture session.
 
     Source events carry a version. A translated draft can only update the
-    matching source version; confirmed jobs are retained in order. At most
-    one draft and three pending confirmed jobs wait on either lane.
+    matching source version. Confirmed jobs are retained in order, and only
+    the latest draft waits on either lane.
     """
 
     def __init__(self, source, autoplay=False, number_mode="original", cloud=None):
         if source not in {"yue", "zh"}:
             raise ValueError("请选择粤语或普通话方向。")
         self.source, self.autoplay, self.number_mode = source, autoplay, number_mode
-        self.mailbox = SongMailbox()
+        self.mailbox = SongMailbox.for_capture()
         self.cloud_config = cloud
 
     def run(self, engine, player, cancel, emit):
@@ -71,6 +71,11 @@ class LiveSession:
                 translated_block, state, preview_at = -1, None, 0
                 while (job := translations.get(cancel)) is not None:
                     check_cancel(cancel)
+                    if not job.final and (
+                        translations.has_waiting_confirmation()
+                        or self.mailbox.has_waiting_confirmation()
+                    ):
+                        continue
                     begin = time.perf_counter()
                     if job.block != translated_block:
                         translated_block, state, preview_at = job.block, IncrementalTranslation(), 0
@@ -185,18 +190,23 @@ class LiveSession:
                         lag_seconds=time.monotonic() - window.captured_at,
                     ),
                 )
-                translations.put(
-                    Translation(
-                        block,
-                        text,
-                        window.final,
-                        version,
-                        seconds,
-                        window.captured_at,
-                        revision.frozen,
-                        result.tail,
+                if window.final or not (
+                    self.mailbox.has_waiting_confirmation()
+                    or translations.has_waiting_confirmation()
+                ):
+                    translations.put(
+                        Translation(
+                            block,
+                            text,
+                            window.final,
+                            version,
+                            seconds,
+                            window.captured_at,
+                            revision.frozen,
+                            result.tail,
+                        ),
+                        cancel=cancel,
                     )
-                )
                 confirmed_count += window.final
             translations.finish()
             while worker.is_alive():

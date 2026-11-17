@@ -119,6 +119,28 @@ class TranscriptModel(QAbstractListModel):
         self.characters = self.evicted = 0
         self.endResetModel()
 
+    def replace_entries(self, entries):
+        items = list(entries)
+        if len({item.key for item in items}) != len(items):
+            raise ValueError("重复字幕编号")
+        sizes = [len(item.source) + len(item.target) for item in items]
+        if any(size > self.max_chars for size in sizes):
+            raise ValueError("单条字幕超出缓存容量")
+        start = max(0, len(items) - self.max_rows)
+        characters = sum(sizes[start:])
+        while characters > self.max_chars:
+            characters -= sizes[start]
+            start += 1
+        items = items[start:]
+        self.beginResetModel()
+        self.items = items
+        self.by_key = {item.key: item for item in items}
+        self.characters = characters
+        self.evicted = start
+        self._positions = {item.key: row for row, item in enumerate(items)}
+        self._first_row = 0
+        self.endResetModel()
+
     def export_text(self, entries=None):
         names = {"zh": "普通话", "yue": "粤语", "en": "英文"}
         rows = self.items if entries is None else entries

@@ -11,10 +11,12 @@ import numpy as np
 import soundfile as sf
 from desktop_engine import Request
 from desktop_qt import STYLE, Window
-from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtCore import QPoint, QPointF, QSettings, Qt
 from PySide6.QtGui import QFontDatabase, QWheelEvent
 from PySide6.QtWidgets import QApplication
 from transcript_model import TranscriptEntry, TranscriptModel
+
+from yuepu_translate.session_history import SessionHistory
 
 ROOT = Path(__file__).resolve().parent
 OUT = ROOT / "outputs/qt-smoke"
@@ -107,8 +109,9 @@ def scroll_input_check(window, app, pump):
 
 
 def main():
-    OUT.mkdir(exist_ok=True)
+    OUT.mkdir(parents=True, exist_ok=True)
     checks = cache_checks()
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, str(OUT / "settings"))
     app = QApplication([])
     # The offscreen plugin has no Windows font database; register a real system
     # CJK font explicitly for faithful Chinese rendering in verification images.
@@ -116,7 +119,7 @@ def main():
         assert QFontDatabase.addApplicationFont("C:/Windows/Fonts/msyh.ttc") >= 0
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
-    window = Window(muted=True)
+    window = Window(muted=True, history=SessionHistory(OUT / "history.sqlite3"))
     window.setAttribute(Qt.WA_ShowWithoutActivating)
     if os.environ["QT_QPA_PLATFORM"] == "windows":
         window.setWindowFlag(Qt.WindowDoesNotAcceptFocus)
@@ -146,8 +149,6 @@ def main():
         pump()
         window.grab().save(str(OUT / "initial.png"))
         assert window.microphone is None and not window.ready
-        window.load_button.click()
-        until(lambda: window.ready and window.pending == 0)
         for source, text in [
             ("yue", "佢今日唔得閒，聽日下晝三點先嚟。"),
             ("zh", "请在明天下午三点来，不要上午来。"),
@@ -156,10 +157,10 @@ def main():
             before = len(window.model.items)
             old = [(e.key, e.source, e.target) for e in window.model.items]
             window.direction_box.setCurrentIndex(0 if source == "yue" else 1)
-            window.show_composer(True)
             window.input.setPlainText(text)
             window.translate_button.click()
             until(lambda: window.pending == 0)
+            assert window.ready
             assert len(window.model.items) == before + 1
             item = window.model.items[-1]
             assert item.source == text and item.target and item.status == "已翻译"
@@ -167,10 +168,9 @@ def main():
             report["real_model_cases"].append(
                 dict(source=source, text=text, translation=item.target)
             )
-        window.show_composer(False)
         before = [(e.key, e.source, e.target) for e in window.model.items]
         window.stop()
-        window.swap_button.click()
+        window.direction_box.setCurrentIndex(1 - window.direction_box.currentIndex())
         assert [(e.key, e.source, e.target) for e in window.model.items] == before
         window.source_box.setCurrentIndex(1)
         assert window.microphone is None

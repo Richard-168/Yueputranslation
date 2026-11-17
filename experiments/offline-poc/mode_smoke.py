@@ -18,6 +18,7 @@ from PySide6.QtWidgets import QApplication, QDialogButtonBox  # noqa: E402
 from yuepu_translate.cloud_config import CloudConfig  # noqa: E402
 from yuepu_translate.desktop_qt import Window  # noqa: E402
 from yuepu_translate.preferences import cache_directory, load_preferences  # noqa: E402
+from yuepu_translate.session_history import SessionHistory  # noqa: E402
 from yuepu_translate.settings_dialog import SettingsDialog  # noqa: E402
 from yuepu_translate.song_pipeline import SongFile, make_song_stream  # noqa: E402
 
@@ -48,11 +49,14 @@ class Capture:
     selections = []
 
     def __init__(self, emit, error, started=None, **kwargs):
+        self.started = started
         factory = kwargs.get("segmenter_factory") or make_song_stream
         self.selections.append((factory.func.__name__, factory.keywords["sensitivity"]))
         self.stream = factory(emit)
 
     def start(self):
+        if self.started:
+            self.started("模拟音源")
         self.stream.feed(np.ones(4 * 16000, np.float32))
 
     def stop(self):
@@ -95,7 +99,8 @@ def main():
         patch("yuepu_translate.desktop_qt.Microphone", Capture),
         patch("yuepu_translate.desktop_qt.SystemAudio", Capture),
     ):
-        window = Window(muted=True)
+        history = SessionHistory(OUT / "history.sqlite3")
+        window = Window(muted=True, history=history)
         window.show()
         window.ready = True
         window.engine.recognize = lambda *args: "轻量草稿测试"
@@ -103,10 +108,10 @@ def main():
         window._buttons()
         try:
             assert [window.profile_box.itemText(i) for i in range(2)] == [
-                "flash",
-                "pro",
+                "快速  (flash)",
+                "精细  (pro)",
             ]
-            assert window.profile_box.currentText() == "pro"
+            assert window.profile_box.currentIndex() == 1
             assert window.sensitivity_box.currentData() == "standard"
             assert [window.sensitivity_box.itemText(i) for i in range(2)] == ["标准", "灵敏"]
             window.sensitivity_box.setCurrentIndex(1)
@@ -127,9 +132,10 @@ def main():
                                 bool(window.model.items)
                                 and window.model.items[-1].key > previous_key
                                 and window.microphone is not None
+                                and window.capture_started
                             )
                         )
-                        assert not window.sensitivity_box.isEnabled()
+                        assert not window.audio_button.isEnabled()
                         assert Capture.selections[-1] == (
                             "make_song_stream" if index else "make_live_stream",
                             sensitivity,
@@ -140,7 +146,7 @@ def main():
                             assert window.model.items[-1].status != "已确认"
                         window.record_button.click()
                         wait_for(lambda: window.pending == 0)
-                        assert window.sensitivity_box.isEnabled()
+                        assert window.audio_button.isEnabled()
                         item = window.model.items[-1]
                         assert item.status == "已确认" and item.target
                         assert item.source == ("复核后的测试短句。" if index else "轻量草稿测试。")
@@ -230,8 +236,13 @@ def main():
                 dialog.buttons.button(QDialogButtonBox.Save).click()
 
             QTimer.singleShot(50, save_defaults)
-            window.settings_button.click()
-            assert window.profile_box.currentText() == "flash"
+            preferences_action = next(
+                action
+                for action in window.settings_button.menu().actions()
+                if action.text() == "首选项…"
+            )
+            preferences_action.trigger()
+            assert window.profile_box.currentIndex() == 0
             assert window.source_box.currentIndex() == 1
             assert window.sensitivity_box.currentData() == "standard"
             assert cache_directory() == OUT / "cache"
@@ -268,13 +279,13 @@ def main():
             assert window.model.items[-1].source == "复核后的测试短句"
             assert window.model.items[-1].status == "已确认"
             checks.append("pro file entry")
-            assert window.profile_box.isEnabled()
+            assert window.audio_button.isEnabled()
         finally:
             finish(window)
 
-        restored = Window(muted=True)
+        restored = Window(muted=True, history=history)
         try:
-            assert restored.profile_box.currentText() == "flash"
+            assert restored.profile_box.currentIndex() == 0
             assert restored.source_language() == "zh"
             assert restored.source_box.currentIndex() == 1
             assert restored.sensitivity_box.currentData() == "standard"

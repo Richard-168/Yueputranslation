@@ -58,7 +58,7 @@ class SongSession:
         if source not in {"yue", "zh"}:
             raise ValueError("请选择粤语或普通话方向。")
         self.source, self.autoplay, self.number_mode = source, autoplay, number_mode
-        self.mailbox = SongMailbox()
+        self.mailbox = SongMailbox.for_capture()
         self.file_mode = False
         self.cloud_config = cloud
 

@@ -172,11 +172,15 @@ internal class ConversationController(
                 translate.start(); recognition.start()
                 val input = AudioCapture(context, models.root, sensitivity, flag,
                     { windows.put(it, it.final) }, { emit(SessionEvent.Level(it)) },
+                    {
+                        if (!flag.get()) {
+                            listening = true
+                            state("正在收音 · ${sensitivity.label} · ${direction.label}")
+                        }
+                    },
                     { windows.finish() }, ::fail, { System.nanoTime() < playbackUntil.get() })
                 capture = input
                 input.start()
-                listening = true
-                state("正在收音 · ${sensitivity.label} · ${direction.label}")
                 input.join()
                 listening = false
                 state("正在确认末尾并完成翻译…")

@@ -26,6 +26,7 @@ from yuepu_translate.desktop_engine import PlaybackProcessor, SpeechSegmenter
 from yuepu_translate.desktop_qt import STYLE, Window
 from yuepu_translate.desktop_theme import THEMES
 from yuepu_translate.local_inference import LocalInference
+from yuepu_translate.session_history import SessionHistory
 from yuepu_translate.song_pipeline import make_song_stream
 from yuepu_translate.transcript_model import TranscriptEntry
 
@@ -193,7 +194,7 @@ def main():
             raise RuntimeError("Chinese font is unavailable for offscreen rendering")
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
-    window = Window(muted=True)
+    window = Window(muted=True, history=SessionHistory(args.output / "history.sqlite3"))
     window.engine.asr = model_runtime.recognizer()
     if args.speak and not args.device:
         if args.source == "yue":
@@ -278,7 +279,7 @@ def main():
     window.engine.recognize = recognize
 
     class InjectedCapture:
-        def __init__(self, emit, error, ready=None, paragraph=False, segmenter_factory=None):
+        def __init__(self, emit, error, started=None, paragraph=False, segmenter_factory=None):
             self.stop_event = threading.Event()
             self.processor = PlaybackProcessor(
                 rate,
@@ -287,13 +288,13 @@ def main():
                 segmenter_factory=segmenter_factory or (make_song_stream if paragraph else None),
             )
             self.thread = None
-            self.ready, self.error = ready, error
+            self.started, self.error = started, error
 
         def start(self):
             def feed():
                 try:
-                    if self.ready:
-                        self.ready("本地 PCM 注入（非真实设备）")
+                    if self.started:
+                        self.started("本地 PCM 注入（非真实设备）")
                     timing["start"] = time.monotonic()
                     started.set()
                     size = max(1, round(rate * 0.032))

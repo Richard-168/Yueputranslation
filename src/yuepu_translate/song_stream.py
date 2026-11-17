@@ -167,30 +167,50 @@ class RollingAudio:
 
 
 class SongMailbox:
-    """Coalesce drafts, preserve every final; stop explicitly on overload."""
+    """FIFO confirmations, one replaceable draft, and a bounded backlog."""
 
-    def __init__(self, max_finals=3):
+    def __init__(self, max_finals=3, *, stop_at_limit=False):
         self.condition = Condition()
         self.finals = deque()
         self.draft = None
         self.finished = False
         self.max_finals = max_finals
+        self.stop_at_limit = stop_at_limit
         self.coalesced = 0
         self.last_final = -1
 
-    def put(self, window):
+    @classmethod
+    def for_capture(cls):
+        # Enough room for bursts and model warm-up, with at most 16 audio
+        # windows waiting. Capture never waits on a slow inference thread.
+        return cls(max_finals=16, stop_at_limit=True)
+
+    def put(self, window, *, cancel=None):
         with self.condition:
-            if self.finished or window.block <= self.last_final:
+            if (
+                self.finished
+                or window.block <= self.last_final
+                or (cancel is not None and cancel.is_set())
+            ):
                 return
             if window.final or window.checkpoint:
-                if len(self.finals) >= self.max_finals:
-                    raise SongOverload("字幕处理跟不上播放速度，已停止收音。请暂停来源后重试。")
+                while len(self.finals) >= self.max_finals:
+                    if cancel is None:
+                        raise SongOverload("字幕处理跟不上播放速度，待确认队列已满。")
+                    self.condition.wait(0.05)
+                    if self.finished or cancel.is_set() or window.block <= self.last_final:
+                        return
                 self.finals.append(window)
                 if window.final:
                     self.last_final = window.block
                 if self.draft is not None and self.draft.block <= window.block:
                     self.coalesced += 1
                     self.draft = None
+                if self.stop_at_limit and len(self.finals) == self.max_finals:
+                    # Keep the window that filled the buffer. The producer
+                    # closes capture and the consumer can still drain it.
+                    self.condition.notify_all()
+                    raise SongOverload("字幕处理跟不上播放速度，待确认队列已满。")
             else:
                 if self.draft is not None:
                     self.coalesced += 1
@@ -201,7 +221,9 @@ class SongMailbox:
         with self.condition:
             while not cancel.is_set():
                 if self.finals:
-                    return self.finals.popleft()
+                    window = self.finals.popleft()
+                    self.condition.notify_all()
+                    return window
                 if self.draft is not None:
                     window, self.draft = self.draft, None
                     return window
@@ -215,8 +237,10 @@ class SongMailbox:
             self.finished = True
             self.condition.notify_all()
 
-    def has_waiting_confirmation(self, block):
+    def has_waiting_confirmation(self, block=None):
         with self.condition:
+            if block is None:
+                return bool(self.finals)
             return any(window.block == block for window in self.finals)
 
 

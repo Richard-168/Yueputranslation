@@ -45,7 +45,7 @@ yuepu-translate = "yuepu_translate.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-yuepu_translate = ["assets/*.svg"]
+yuepu_translate = ["assets/*.svg", "assets/yuepu-logo.png", "assets/yuepu-logo.ico"]
 
 [tool.ruff]
 target-version = "py312"

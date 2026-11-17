@@ -1,4 +1,4 @@
-"""Load real models through the Qt Load button using the default temporary cache.
+"""Verify real startup warm-up and an early submission using the default temporary cache.
 
 No capture, playback, cloud calls, or custom cache-directory override.
 Preferences are isolated; actual recognizers, both TTS engines, and MT warm up.
@@ -21,6 +21,7 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 from yuepu_translate.cloud_config import CloudConfig  # noqa: E402
 from yuepu_translate.desktop_qt import Window  # noqa: E402
 from yuepu_translate.preferences import cache_directory, load_preferences  # noqa: E402
+from yuepu_translate.session_history import SessionHistory  # noqa: E402
 
 OUT = Path(__file__).resolve().parents[2] / "outputs/load-smoke"
 
@@ -41,8 +42,7 @@ def main():
         return directory
 
     with patch("yuepu_translate.desktop_qt.load_settings", return_value=(CloudConfig(), False)):
-        window = Window(muted=True)
-    window.show()
+        window = Window(muted=True, history=SessionHistory(OUT / "history.sqlite3"), preload=True)
     original_status = window.status
 
     def status(text, error=False):
@@ -59,7 +59,14 @@ def main():
     )
     tracking.start()
     try:
-        window.load_button.click()
+        window.show()
+        app.processEvents()
+        assert window.loading and window.pending == 1, "Startup did not queue model loading"
+        assert not window.input.isReadOnly()
+        window.input.setPlainText("多谢你的帮忙。")
+        window.auto_box.setChecked(False)
+        window.translate_button.click()
+        assert window.after_load is not None and window.pending == 1
         deadline = started + 120
         while window.pending and time.monotonic() < deadline:
             app.processEvents()
@@ -67,8 +74,8 @@ def main():
         assert not window.pending, "Loading timed out"
         assert window.ready and window.engine.warmed, errors
         assert not errors, errors
+        assert len(window.model.items) == 1 and window.model.items[0].target
         assert window.record_button.isVisible() and window.record_button.isEnabled()
-        assert not window.load_button.isVisible()
         cache_directory()
         assert created_temporary_directories
         assert not any(path.exists() for path in created_temporary_directories), (
@@ -77,7 +84,7 @@ def main():
         window.grab().save(str(OUT / "ready.png"))
         report = dict(
             result="passed",
-            entry="actual Qt Load button",
+            entry="startup model warm-up and a queued translation",
             cache="OS temporary directory, no override",
             seconds=round(time.monotonic() - started, 3),
             ready=window.ready,

@@ -555,9 +555,14 @@ def make_vad(*, live=False, sensitivity=DEFAULT_SENSITIVITY):
 
 
 class Microphone(CaptureProcess):
-    def __init__(self, segment, error, paragraph=False, segmenter_factory=None):
+    def __init__(self, segment, error, paragraph=False, segmenter_factory=None, *, started=None):
         super().__init__(
-            "microphone", segment, error, paragraph=paragraph, segmenter_factory=segmenter_factory
+            "microphone",
+            segment,
+            error,
+            started=started,
+            paragraph=paragraph,
+            segmenter_factory=segmenter_factory,
         )
 
 
