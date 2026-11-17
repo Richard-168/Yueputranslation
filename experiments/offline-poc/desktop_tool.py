@@ -12,6 +12,8 @@ from tkinter import filedialog, ttk
 
 from desktop_engine import AudioPlayer, Cancelled, Engine, Microphone, Request, SystemAudio
 
+from yuepu_translate import APP_NAME
+
 ROOT = Path(__file__).resolve().parent
 COLORS = dict(
     bg="#F8FAFC",
@@ -59,7 +61,7 @@ class Window:
 
     def _build(self):
         root = self.root
-        root.title("粤普随译 · Windows 离线验证工具")
+        root.title(f"{APP_NAME} · Windows 离线验证工具")
         root.geometry("1140x760")
         root.minsize(940, 650)
         root.configure(bg=COLORS["bg"])
@@ -82,7 +84,7 @@ class Window:
         shell.pack(fill="both", expand=True)
         top = ttk.Frame(shell)
         top.pack(fill="x")
-        ttk.Label(top, text="粤普随译", font=("Microsoft YaHei UI", 24, "bold")).pack(side="left")
+        ttk.Label(top, text=APP_NAME, font=("Microsoft YaHei UI", 24, "bold")).pack(side="left")
         ttk.Label(top, text="Windows 离线验证工具", foreground=COLORS["muted"]).pack(
             side="left", padx=18, pady=(10, 0)
         )

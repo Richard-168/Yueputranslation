@@ -16,7 +16,13 @@ os.environ.setdefault("QT_QPA_PLATFORM", "windows" if os.name == "nt" else "offs
 import _bootstrap  # noqa: E402, F401
 from PySide6.QtCore import QPoint, QSettings, Qt  # noqa: E402
 from PySide6.QtTest import QTest  # noqa: E402
-from PySide6.QtWidgets import QApplication, QComboBox, QPushButton, QToolButton  # noqa: E402
+from PySide6.QtWidgets import (  # noqa: E402
+    QApplication,
+    QComboBox,
+    QLabel,
+    QPushButton,
+    QToolButton,
+)
 
 from yuepu_translate.cloud_config import CloudConfig  # noqa: E402
 from yuepu_translate.cloud_dialog import CloudDialog  # noqa: E402
@@ -145,6 +151,7 @@ def verify(app, history):
     window = open_window()
     try:
         assert not window.windowIcon().isNull() and window.empty_brand.isVisible()
+        assert window.windowTitle() == window.findChild(QLabel, "brand").text() == "粤普同传"
         assert not window.ready and window.record_button.isEnabled()
         assert not window.history_list.count()
         for theme in THEMES:

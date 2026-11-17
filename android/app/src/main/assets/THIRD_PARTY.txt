@@ -1,4 +1,4 @@
-YuePuTranslate Android 0.1.0-dev — private development preview
+粤普同传 Android 0.1.0-dev 开发预览
 
 Original application: MIT, see the repository LICENSE.
 llama.cpp b12314 / e1f7593c32e8dd782fc7addb908d0911260511ae: MIT.

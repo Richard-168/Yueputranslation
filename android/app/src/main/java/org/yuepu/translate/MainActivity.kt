@@ -1,6 +1,9 @@
 package org.yuepu.translate
 
 import android.Manifest
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.app.Activity
 import android.app.AlertDialog
 import android.app.Dialog
@@ -9,6 +12,7 @@ import android.content.pm.PackageManager
 import android.content.res.ColorStateList
 import android.content.res.Configuration
 import android.graphics.Color
+import android.graphics.Rect
 import android.graphics.drawable.ColorDrawable
 import android.os.Build
 import android.os.Bundle
@@ -42,6 +46,7 @@ import android.widget.Switch
 import android.widget.TextView
 import android.widget.Toast
 import java.text.SimpleDateFormat
+import java.time.LocalTime
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -65,6 +70,7 @@ class MainActivity : Activity() {
     private var historyDirty = false
     private var saveQueued = false
     private var sessionId = UUID.randomUUID().toString()
+    private var greeting = nextGreeting()
     private var sessions = emptyList<SavedSession>()
     private val drafts = mutableMapOf<String, String>()
 
@@ -73,6 +79,9 @@ class MainActivity : Activity() {
     private lateinit var composerOptions: LinearLayout
     private lateinit var captionTools: LinearLayout
     private lateinit var empty: ScrollView
+    private lateinit var welcomeContent: LinearLayout
+    private lateinit var welcomeTitle: TextView
+    private lateinit var welcomeSpace: View
     private lateinit var onboarding: LinearLayout
     private lateinit var input: EditText
     private lateinit var directionButton: Button
@@ -89,6 +98,8 @@ class MainActivity : Activity() {
     private lateinit var captions: ListView
     private lateinit var adapter: Captions
     private var rail: HistoryPanel? = null
+    private var railHost: LinearLayout? = null
+    private var railAnimation: ValueAnimator? = null
     private var currentSheet: Dialog? = null
 
     private var statusMessage = ""
@@ -98,6 +109,9 @@ class MainActivity : Activity() {
     private var afterLoad: (() -> Unit)? = null
     private var importing = false
     private var busy = false
+    private var loading = false
+    private var loadCancelled = false
+    private var retryInterruptedLoad = false
     private var listening = false
     private var ready = false
     private var packReady = false
@@ -106,12 +120,14 @@ class MainActivity : Activity() {
     private var destroyed = false
     private var keyboardVisible = false
     private var compactKeyboard = false
+    private var hasWelcomeRoom = true
     private var inputLevel = 0
     private var workingEpoch = 0L
 
     private val widthDp get() = resources.configuration.screenWidthDp
     private val wide get() = widthDp >= 720
-    private val paired get() = widthDp >= 900
+    private val historyExpanded get() = preferences.getBoolean("historyExpanded", true)
+    private val historyWidth get() = dp(minOf(300, widthDp / 3))
     private val appearance get() = preferences.getString("appearance", "dark") ?: "dark"
     private val light get() = when (appearance) {
         "light" -> true
@@ -130,6 +146,7 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         history = SessionHistory(this)
         sessionId = savedInstanceState?.getString("session") ?: sessionId
+        greeting = savedInstanceState?.getString("greeting") ?: greeting
         exportSession = savedInstanceState?.getString("exportSession")
         if (savedInstanceState != null) attempt { store.restore(history.load(sessionId)) }
         models = AppModels(this)
@@ -150,6 +167,8 @@ class MainActivity : Activity() {
             captions.lastVisiblePosition < adapter.count - 1
         val rowAtTop = if (readingOlder) captions.firstVisiblePosition else 0
         val rowOffset = if (readingOlder) captions.getChildAt(0)?.top ?: 0 else 0
+        railAnimation?.cancel()
+        railAnimation = null
         ui = MobileUi(this, light)
         styleSystemBars()
         val outer = row().apply {
@@ -161,33 +180,51 @@ class MainActivity : Activity() {
                     val ime = insets.getInsets(WindowInsets.Type.ime())
                     val bottom = maxOf(safe.bottom, ime.bottom)
                     view.setPadding(safe.left, safe.top, safe.right, bottom)
-                    updateKeyboard(
-                        insets.isVisible(WindowInsets.Type.ime()),
-                        windowManager.currentWindowMetrics.bounds.height() - safe.top - bottom,
-                    )
+                    val visible = insets.isVisible(WindowInsets.Type.ime())
+                    val windowHeight = windowManager.currentWindowMetrics.bounds.height()
+                    updateKeyboard(visible, windowHeight - safe.top - bottom)
                 }
                 insets
             }
-            if (Build.VERSION.SDK_INT < 30) addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
-                val available = bottom - top
-                val visible = resources.displayMetrics.heightPixels - available > dp(120)
+            if (Build.VERSION.SDK_INT < 30) addOnLayoutChangeListener { view, _, top, _, bottom, _, _, _, _ ->
+                val frame = Rect().also(view::getWindowVisibleDisplayFrame)
+                val available = minOf(bottom - top, frame.height())
+                @Suppress("DEPRECATION")
+                val bottomOccluded = view.rootWindowInsets?.let { it.systemWindowInsetBottom > it.stableInsetBottom } == true
+                val visible = bottomOccluded || view.rootView.height - frame.height() > dp(120)
                 updateKeyboard(visible, available)
             }
         }
         rail = if (wide) HistoryPanel().also { panel ->
-            outer.addView(panel.view, LinearLayout.LayoutParams(dp(232), -1))
-            outer.addView(View(this).apply { setBackgroundColor(ui.border) },
-                LinearLayout.LayoutParams(dp(1), -1))
+            railHost = row().apply {
+                clipChildren = true
+                gravity = Gravity.START or Gravity.TOP
+                addView(panel.view, LinearLayout.LayoutParams(historyWidth - dp(1), -1))
+                addView(View(this@MainActivity).apply { setBackgroundColor(ui.divider) },
+                    LinearLayout.LayoutParams(dp(1), -1))
+                visibility = if (historyExpanded) View.VISIBLE else View.GONE
+                outer.addView(this, LinearLayout.LayoutParams(if (historyExpanded) historyWidth else 0, -1))
+            }
         } else null
+        if (!wide) railHost = null
         pane = column().apply {
             val gutter = dp(if (wide) 24 else 16)
             setPadding(gutter, dp(4), gutter, dp(8))
             isFocusableInTouchMode = true
+            addOnLayoutChangeListener { _, _, top, _, bottom, _, _, _, _ ->
+                val fits = bottom - top >= dp(540) * resources.configuration.fontScale.coerceAtLeast(1f)
+                if (fits != hasWelcomeRoom) {
+                    hasWelcomeRoom = fits
+                    renderControls()
+                }
+            }
         }
         outer.addView(pane, LinearLayout.LayoutParams(0, -1, 1f))
         buildHeader()
         buildCaptionPane()
         buildComposer(draft)
+        welcomeSpace = View(this)
+        pane.addView(welcomeSpace, LinearLayout.LayoutParams(-1, 0, 2f))
         setContentView(outer)
         pane.requestFocus()
         outer.requestApplyInsets()
@@ -205,12 +242,50 @@ class MainActivity : Activity() {
 
     private fun buildHeader() {
         toolbar = row().apply { minimumHeight = dp(52) }
-        toolbar.addView(ui.text("粤普随译", 21f, strong = true), weighted())
-        sessionsButton = ui.button("会话", ButtonKind.Quiet) { showHistory() }
+        toolbar.addView(ui.text(getString(R.string.app_name), 21f, strong = true), weighted())
+        sessionsButton = ui.button(historyButtonLabel(), ButtonKind.Quiet) {
+            if (wide) toggleHistory() else showHistory()
+        }
         settingsButton = ui.button("设置", ButtonKind.Quiet) { showSettings() }
         toolbar.addView(sessionsButton)
         toolbar.addView(settingsButton)
         pane.addView(toolbar)
+    }
+
+    private fun historyButtonLabel() = when {
+        !wide -> "会话"
+        historyExpanded -> "收起会话"
+        else -> "展开会话"
+    }
+
+    private fun toggleHistory() {
+        val host = railHost ?: return
+        val expanded = !historyExpanded
+        val initialWidth = host.layoutParams.width
+        val target = if (expanded) historyWidth else 0
+        preferences.edit().putBoolean("historyExpanded", expanded).apply()
+        sessionsButton.text = historyButtonLabel()
+        railAnimation?.cancel()
+        host.visibility = View.VISIBLE
+        fun resize(width: Int) {
+            host.layoutParams = host.layoutParams.apply { this.width = width }
+        }
+        if (!ValueAnimator.areAnimatorsEnabled() || initialWidth == target) {
+            resize(target)
+            host.visibility = if (expanded) View.VISIBLE else View.GONE
+            return
+        }
+        railAnimation = ValueAnimator.ofInt(initialWidth, target).apply {
+            duration = 180
+            addUpdateListener { resize(it.animatedValue as Int) }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) {
+                    if (!historyExpanded) host.visibility = View.GONE
+                    railAnimation = null
+                }
+            })
+            start()
+        }
     }
 
     private fun buildCaptionPane() {
@@ -226,29 +301,33 @@ class MainActivity : Activity() {
         adapter = Captions()
         captions = ListView(this).apply {
             adapter = this@MainActivity.adapter
-            divider = ColorDrawable(ui.border)
+            divider = ColorDrawable(ui.divider)
             dividerHeight = dp(1)
             setOnItemClickListener { _, _, position, _ ->
                 val item = this@MainActivity.adapter.rows.getOrNull(position) ?: return@setOnItemClickListener
-                if (item.targetFinal && !busy && packReady) attempt {
+                if (item.targetFinal && canSubmit()) attempt {
                     withReady { controller.replay(item.target, if (item.sourceLanguage == "yue") "zh" else "yue") }
                 }
+            }
+        }
+        captions.addOnLayoutChangeListener { _, left, _, right, _, oldLeft, _, oldRight, _ ->
+            if (pairedCaptions(right - left) != pairedCaptions(oldRight - oldLeft)) {
+                captions.post { adapter.notifyDataSetChanged() }
             }
         }
         workarea.addView(captions, FrameLayout.LayoutParams(-1, -1))
         empty = ScrollView(this).apply { isFillViewport = true }
         val welcome = column().apply {
-            gravity = Gravity.CENTER
-            setPadding(dp(12), dp(20), dp(12), dp(20))
+            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+            setPadding(dp(12), dp(16), dp(12), dp(24))
         }
+        welcomeContent = welcome
         welcome.addView(ImageView(this).apply {
             setImageResource(R.drawable.yuepu_mark)
             importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-        }, LinearLayout.LayoutParams(dp(64), dp(64)))
-        welcome.addView(ui.text("粤普随译", 28f, strong = true).apply {
-            gravity = Gravity.CENTER
-            setPadding(0, dp(12), 0, 0)
-        })
+        }, LinearLayout.LayoutParams(dp(52), dp(52)))
+        welcomeTitle = ui.welcome(greeting)
+        welcome.addView(welcomeTitle, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
         onboarding = column().apply {
             gravity = Gravity.CENTER
             setPadding(0, dp(12), 0, 0)
@@ -259,7 +338,7 @@ class MainActivity : Activity() {
         welcome.addView(onboarding)
         empty.addView(welcome)
         workarea.addView(empty, FrameLayout.LayoutParams(-1, -1))
-        pane.addView(workarea, LinearLayout.LayoutParams(-1, 0, 1f))
+        pane.addView(workarea, LinearLayout.LayoutParams(-1, 0, 3f))
     }
 
     private fun buildComposer(draft: String) {
@@ -301,15 +380,18 @@ class MainActivity : Activity() {
         send = ui.button("翻译", ButtonKind.Primary) { attempt { translateInput() } }
         actions.addView(mic, weighted())
         actions.addView(send, weighted().apply { marginStart = dp(6) })
-        if (widthDp >= 840) {
-            composer.addView(row().apply {
-                addView(composerOptions, weighted())
-                addView(actions, weighted().apply { marginStart = dp(8) })
-            })
-        } else {
-            composer.addView(composerOptions)
-            composer.addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
-        }
+        composer.addView(column().apply {
+            addView(composerOptions, LinearLayout.LayoutParams(-1, -2))
+            addView(actions, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+            addOnLayoutChangeListener { _, left, _, right, _, _, _, _, _ ->
+                val oneRow = right - left >= dp(600) * resources.configuration.fontScale.coerceAtLeast(1f)
+                if (oneRow == (orientation == LinearLayout.HORIZONTAL)) return@addOnLayoutChangeListener
+                orientation = if (oneRow) LinearLayout.HORIZONTAL else LinearLayout.VERTICAL
+                composerOptions.layoutParams = if (oneRow) weighted() else LinearLayout.LayoutParams(-1, -2)
+                actions.layoutParams = if (oneRow) weighted().apply { marginStart = dp(8) }
+                else LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) }
+            }
+        })
         pane.addView(composer)
 
         level = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
@@ -459,7 +541,7 @@ class MainActivity : Activity() {
         section(body, "离线模型")
         body.addView(ui.text(when {
             ready -> "本地模型已就绪"
-            packReady -> "已导入，首次翻译时自动加载"
+            packReady -> "离线模型已导入"
             else -> "请导入适用于 Android 的离线模型包"
         }, 15f, ui.muted))
         body.addView(ui.button(if (packReady) "替换模型包" else "导入模型包", ButtonKind.Outline) {
@@ -503,7 +585,7 @@ class MainActivity : Activity() {
             }
         }
         private val add = ui.button("＋  新会话", ButtonKind.Secondary) {
-            if (changeSession(UUID.randomUUID().toString())) onOpen()
+            if (changeSession(UUID.randomUUID().toString(), new = true)) onOpen()
         }
 
         init {
@@ -537,7 +619,7 @@ class MainActivity : Activity() {
             val card = (convertView as? LinearLayout) ?: column().apply {
                 minimumHeight = dp(58)
                 setPadding(dp(12), dp(8), dp(12), dp(8))
-                addView(ui.text("", 16f).apply {
+                addView(ui.text("", 16f, strong = true).apply {
                     maxLines = 1
                     ellipsize = TextUtils.TruncateAt.END
                 })
@@ -575,7 +657,7 @@ class MainActivity : Activity() {
         }
     }
 
-    private fun changeSession(id: String): Boolean {
+    private fun changeSession(id: String, new: Boolean = false): Boolean {
         if (busy || !flushHistory()) return false
         if (id == sessionId) return true
         try {
@@ -587,6 +669,10 @@ class MainActivity : Activity() {
         val draft = input.text.toString()
         if (draft.isNotBlank()) drafts[sessionId] = draft else drafts.remove(sessionId)
         sessionId = id
+        if (new) {
+            greeting = nextGreeting()
+            welcomeTitle.text = greeting
+        }
         input.setText(drafts.remove(id).orEmpty())
         workingEpoch = 0L
         showStatus("")
@@ -615,19 +701,22 @@ class MainActivity : Activity() {
     }
 
     private fun withReady(action: () -> Unit) {
-        if (busy || afterLoad != null) return
         require(packReady) { "请在设置中导入离线模型包。" }
+        if (!canSubmit()) return
         if (ready) action()
         else {
             afterLoad = action
             try {
-                controller.load(direction())
+                if (!loading) controller.load(direction())
+                renderControls()
             } catch (error: Exception) {
                 afterLoad = null
                 throw error
             }
         }
     }
+
+    private fun canSubmit() = packReady && (!busy || loading && !loadCancelled) && afterLoad == null
 
     private fun translateInput() {
         val value = input.text.toString().trim()
@@ -647,7 +736,7 @@ class MainActivity : Activity() {
     private fun beginTranscript(): Long = store.begin(direction().source).also { workingEpoch = it }
 
     private fun requestCapture() {
-        if (busy || !packReady) return
+        if (!canSubmit()) return
         hideKeyboard()
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
             requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), REQUEST_MIC)
@@ -658,7 +747,7 @@ class MainActivity : Activity() {
     }
 
     private fun startIfForeground() {
-        if (!captureAfterPermission || !resumed || !hasWindowFocus() || busy) return
+        if (!captureAfterPermission || !resumed || !hasWindowFocus() || !canSubmit()) return
         captureAfterPermission = false
         attempt { withReady { controller.start(beginTranscript(), direction(), sensitivity(), autoSpeak()) } }
     }
@@ -682,8 +771,17 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         resumed = true
+        resumeInterruptedLoad()
         resumeLoadedAction()
         startIfForeground()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (packReady && !ready && !busy) {
+            retryInterruptedLoad = false
+            attempt { controller.load(direction()) }
+        }
     }
 
     override fun onPause() {
@@ -691,11 +789,20 @@ class MainActivity : Activity() {
         super.onPause()
     }
 
-    private fun cancelWork() {
+    private fun cancelWork(restartOnReturn: Boolean = false) {
+        retryInterruptedLoad = restartOnReturn && loading && !loadCancelled
+        loadCancelled = loadCancelled || loading
         afterLoad = null
         captureAfterPermission = false
         store.cancel()
         controller.cancel()
+        renderControls()
+    }
+
+    private fun resumeInterruptedLoad() {
+        if (!resumed || busy || !retryInterruptedLoad) return
+        retryInterruptedLoad = false
+        if (packReady && !ready) attempt { controller.load(direction()) }
     }
 
     private fun resumeLoadedAction() {
@@ -711,6 +818,8 @@ class MainActivity : Activity() {
         when (event) {
             is SessionEvent.State -> {
                 busy = event.busy
+                if (!loading && event.loading) loadCancelled = false
+                loading = event.loading
                 listening = event.listening
                 ready = event.ready
                 if (listening) window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
@@ -728,6 +837,7 @@ class MainActivity : Activity() {
                     }
                     flushHistory()
                     if (afterLoad != null) handler.post(::resumeLoadedAction)
+                    if (retryInterruptedLoad) handler.post(::resumeInterruptedLoad)
                 }
                 refreshCaptions()
             }
@@ -759,26 +869,29 @@ class MainActivity : Activity() {
         if (!::status.isInitialized) return
         val hasCaptions = adapter.count > 0
         val idle = !busy && afterLoad == null
+        val submit = canSubmit()
         toolbar.visibility = if (compactKeyboard) View.GONE else View.VISIBLE
         composerOptions.visibility = if (compactKeyboard) View.GONE else View.VISIBLE
         empty.visibility = if (hasCaptions || keyboardVisible) View.GONE else View.VISIBLE
+        val raiseWelcome = !hasCaptions && !keyboardVisible && packReady && hasWelcomeRoom
+        welcomeSpace.visibility = if (raiseWelcome) View.VISIBLE else View.GONE
+        welcomeContent.gravity = if (raiseWelcome) Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL else Gravity.CENTER
         captions.visibility = if (hasCaptions) View.VISIBLE else View.GONE
         onboarding.visibility = if (!packReady && idle) View.VISIBLE else View.GONE
         captionTools.visibility = if (hasCaptions && !keyboardVisible) View.VISIBLE else View.GONE
-        sessionsButton.visibility = if (wide) View.GONE else View.VISIBLE
-        sessionsButton.isEnabled = idle
+        sessionsButton.isEnabled = wide || idle
         settingsButton.isEnabled = idle
         directionButton.isEnabled = idle
         optionsButton.isEnabled = idle
         exportButton.isEnabled = idle
         clearButton.isEnabled = idle
-        input.isEnabled = idle
+        input.isEnabled = idle || loading && afterLoad == null
         val lines = if (compactKeyboard) 1 else 3
         if (input.maxLines != lines) input.maxLines = lines
         mic.visibility = if (compactKeyboard) View.GONE else View.VISIBLE
-        mic.isEnabled = packReady && (idle || listening)
+        mic.isEnabled = submit || listening
         mic.text = if (listening) "结束收音" else "开始收音"
-        send.isEnabled = packReady && idle && input.text.isNotBlank()
+        send.isEnabled = submit && input.text.isNotBlank()
         cancelButton.visibility = if (busy || !idle) View.VISIBLE else View.GONE
         level.visibility = if (listening) View.VISIBLE else View.GONE
         level.progress = if (listening) inputLevel else 0
@@ -837,7 +950,8 @@ class MainActivity : Activity() {
         startActivityForResult(Intent(Intent.ACTION_CREATE_DOCUMENT).apply {
             addCategory(Intent.CATEGORY_OPENABLE)
             type = "text/plain"
-            putExtra(Intent.EXTRA_TITLE, "粤普字幕-${SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())}.txt")
+            val timestamp = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.ROOT).format(Date())
+            putExtra(Intent.EXTRA_TITLE, "${getString(R.string.app_name)}-$timestamp.txt")
         }, REQUEST_EXPORT)
     }
 
@@ -861,7 +975,7 @@ class MainActivity : Activity() {
         } else if (code == REQUEST_PACK && result == RESULT_OK && uri != null) {
             val install = {
                 attempt {
-                    controller.importPack { checkNotNull(contentResolver.openInputStream(uri)) }
+                    controller.importPack(direction()) { checkNotNull(contentResolver.openInputStream(uri)) }
                     importing = true
                 }
             }
@@ -877,6 +991,7 @@ class MainActivity : Activity() {
     override fun onSaveInstanceState(outState: Bundle) {
         flushHistory()
         outState.putString("session", sessionId)
+        outState.putString("greeting", greeting)
         outState.putString("draft", input.text.toString())
         outState.putString("exportSession", exportSession)
         super.onSaveInstanceState(outState)
@@ -886,14 +1001,23 @@ class MainActivity : Activity() {
         super.onConfigurationChanged(newConfig)
         currentSheet?.dismiss()
         val draft = input.text.toString()
+        val editing = input.hasFocus()
+        val selectionStart = input.selectionStart
+        val selectionEnd = input.selectionEnd
         keyboardVisible = false
         compactKeyboard = false
         buildUi(draft)
+        if (editing) {
+            input.requestFocus()
+            if (selectionStart >= 0 && selectionEnd >= 0) {
+                input.setSelection(selectionStart.coerceAtMost(input.length()), selectionEnd.coerceAtMost(input.length()))
+            }
+        }
     }
 
     override fun onStop() {
         captureAfterPermission = false
-        if (busy || afterLoad != null) cancelWork()
+        if (busy || afterLoad != null) cancelWork(restartOnReturn = true)
         flushHistory()
         super.onStop()
     }
@@ -901,6 +1025,7 @@ class MainActivity : Activity() {
     override fun onDestroy() {
         destroyed = true
         currentSheet?.dismiss()
+        railAnimation?.cancel()
         handler.removeCallbacksAndMessages(null)
         controller.close()
         history.close()
@@ -913,31 +1038,39 @@ class MainActivity : Activity() {
         override fun getItem(position: Int) = rows[position]
         override fun getItemId(position: Int) = position.toLong()
         override fun getView(position: Int, convertView: View?, parent: ViewGroup): View =
-            ((convertView as? CaptionRow) ?: CaptionRow()).apply { bind(getItem(position)) }
+            ((convertView as? CaptionRow) ?: CaptionRow()).apply {
+                bind(getItem(position), pairedCaptions(parent.width))
+            }
     }
+
+    private fun pairedCaptions(width: Int) =
+        width >= dp(640) * resources.configuration.fontScale.coerceAtLeast(1f)
 
     private inner class CaptionRow : LinearLayout(this@MainActivity) {
         private val info = ui.text("", 15f, ui.muted)
         private val source = ui.text("", 18f)
         private val target = ui.text("", 20f, strong = true)
+        private val lines = column().apply { gravity = Gravity.TOP }
 
         init {
             orientation = VERTICAL
             setPadding(dp(4), dp(12), dp(4), dp(14))
             info.setPadding(0, 0, 0, dp(5))
-            target.setPadding(0, if (paired) 0 else dp(4), 0, 0)
             addView(info)
-            if (paired) addView(row().apply {
-                gravity = Gravity.TOP
-                addView(source, weighted())
-                addView(target, weighted().apply { marginStart = dp(20) })
-            }) else {
-                addView(source)
-                addView(target)
-            }
+            target.setPadding(0, dp(4), 0, 0)
+            lines.addView(source, LayoutParams(-1, -2))
+            lines.addView(target, LayoutParams(-1, -2))
+            addView(lines, LayoutParams(-1, -2))
         }
 
-        fun bind(item: Caption) {
+        fun bind(item: Caption, paired: Boolean) {
+            val layout = if (paired) HORIZONTAL else VERTICAL
+            if (layout != lines.orientation) {
+                lines.orientation = layout
+                source.layoutParams = if (paired) weighted() else LayoutParams(-1, -2)
+                target.layoutParams = if (paired) weighted().apply { marginStart = dp(20) } else LayoutParams(-1, -2)
+                target.setPadding(0, if (paired) 0 else dp(4), 0, 0)
+            }
             val language = if (item.sourceLanguage == "yue") "粤语 → 普通话" else "普通话 → 粤语"
             val state = when {
                 item.targetFinal -> "已确认"
@@ -950,7 +1083,7 @@ class MainActivity : Activity() {
             source.setTextColor(if (item.final) ui.ink else ui.muted)
             target.setTextColor(if (item.targetFinal) ui.ink else ui.muted)
             contentDescription = "$language，$state，原文：${item.source}，译文：${item.target}" +
-                if (item.targetFinal && !busy && packReady) "，点按重播" else ""
+                if (item.targetFinal && canSubmit()) "，点按重播" else ""
         }
     }
 
@@ -958,5 +1091,13 @@ class MainActivity : Activity() {
         const val REQUEST_MIC = 10
         const val REQUEST_PACK = 20
         const val REQUEST_EXPORT = 30
+
+        fun nextGreeting(): String = when (LocalTime.now().hour) {
+            in 5..10 -> listOf("早上好，今天想翻译点什么？", "早晨，今日想譯啲咩？")
+            in 11..13 -> listOf("中午好，想从哪一句开始？", "午安，想由邊句開始？")
+            in 14..17 -> listOf("下午好，今天想翻译点什么？", "下晝好，今日想譯啲咩？")
+            in 18..23 -> listOf("晚上好，想翻译哪一句？", "夜晚好，想譯邊句？")
+            else -> listOf("夜深了，想翻译点什么？", "夜喇，想譯啲咩？")
+        }.random()
     }
 }

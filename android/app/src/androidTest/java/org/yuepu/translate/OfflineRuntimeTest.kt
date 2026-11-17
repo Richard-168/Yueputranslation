@@ -67,7 +67,6 @@ class OfflineRuntimeTest {
                 assertTrue(rate in 8000..48000)
                 val samples = pcm.fold(FloatArray(0)) { all, block -> all + block }
                 assertTrue("Synthesis must emit audible PCM", samples.any { kotlin.math.abs(it) > .005f })
-                engine.setDirection(direction)
                 start = SystemClock.elapsedRealtime()
                 val recognized = engine.recognize(resample(samples, rate), cancelled)
                 metric("${direction.source}_asr_ms", SystemClock.elapsedRealtime() - start)

@@ -10,7 +10,13 @@ import java.util.concurrent.atomic.AtomicLong
 import org.yuepu.translate.core.*
 
 internal sealed class SessionEvent {
-    data class State(val busy: Boolean, val listening: Boolean, val ready: Boolean, val text: String) : SessionEvent()
+    data class State(
+        val busy: Boolean,
+        val listening: Boolean,
+        val ready: Boolean,
+        val loading: Boolean,
+        val text: String,
+    ) : SessionEvent()
     data class Source(val epoch: Long, val block: Long, val version: Long, val text: String, val final: Boolean) : SessionEvent()
     data class Target(val epoch: Long, val block: Long, val version: Long, val text: String, val preview: Boolean) : SessionEvent()
     data class Level(val value: Int) : SessionEvent()
@@ -39,19 +45,26 @@ internal class ConversationController(
     @Volatile var busy = false; private set
     @Volatile var listening = false; private set
     @Volatile var ready = false; private set
+    @Volatile private var loading = false
 
-    private fun state(text: String) = emit(SessionEvent.State(busy, listening, ready, text))
+    private fun state(text: String) = emit(SessionEvent.State(busy, listening, ready, loading, text))
     private fun check(flag: AtomicBoolean) { if (flag.get()) throw CancellationException() }
 
-    @Synchronized private fun launch(text: String, action: (AtomicBoolean) -> Unit) {
+    @Synchronized private fun launch(
+        text: String,
+        loadingModels: Boolean = false,
+        action: (AtomicBoolean) -> String?,
+    ) {
         kotlin.check(!closed.get() && !busy) { "请等待当前处理结束。" }
         busy = true
+        loading = loadingModels
         val flag = AtomicBoolean(false)
         cancelled = flag
         state(text)
         control.execute {
             var errorMessage: String? = null
-            try { action(flag) }
+            var successMessage: String? = null
+            try { successMessage = action(flag) }
             catch (_: CancellationException) { state("已取消，已有字幕保留。") }
             catch (error: Exception) {
                 if (!flag.get() || error is SessionFailure) {
@@ -62,13 +75,18 @@ internal class ConversationController(
                 capture?.stop(); capture?.join(); capture = null
                 player?.close(); player = null
                 audioQueue = null; translationQueue = null
-                listening = false; busy = false
-                state(errorMessage ?: if (flag.get()) "已停止，已有字幕保留。" else if (ready) "本地模型已就绪。" else "请导入模型并加载。")
+                listening = false; loading = false; busy = false
+                state(errorMessage ?: when {
+                    flag.get() -> "已停止，已有字幕保留。"
+                    successMessage != null -> successMessage
+                    ready -> ""
+                    else -> "请导入模型并加载。"
+                })
             }
         }
     }
 
-    fun importPack(input: () -> InputStream) = launch("正在导入并校验模型…") { flag ->
+    fun importPack(direction: Direction, input: () -> InputStream) = launch("正在导入并校验模型…") { flag ->
         ready = false
         engine?.close(); engine = null
         var last = 0L
@@ -80,13 +98,21 @@ internal class ConversationController(
                 }
             }
         }
-        state("模型导入完成，请加载离线模型。")
+        loading = true
+        loadModels(direction, flag)
+        null
     }
 
-    fun load(direction: Direction) = launch("正在校验离线模型…") { flag ->
+    fun load(direction: Direction) = launch("正在校验离线模型…", loadingModels = true) { flag ->
         ready = false
         engine?.close(); engine = null
         models.importer.verify { flag.get() }
+        loadModels(direction, flag)
+        null
+    }
+
+    private fun loadModels(direction: Direction, flag: AtomicBoolean) {
+        check(flag)
         val loaded = OfflineEngine(models.root, context)
         engine = loaded
         try {
@@ -103,14 +129,15 @@ internal class ConversationController(
         launch("正在准备收音…") { flag ->
             val local = checkNotNull(engine) { "请先加载离线模型。" }
             kotlin.check(ready)
-            local.setDirection(direction)
             local.resetTranslation()
             check(flag)
-            val windows = BoundedMailbox<AudioWindow>()
+            // Limit capture latency without dropping confirmations already queued for recognition.
+            val windows = BoundedMailbox<AudioWindow>(maxFinals = 8, stopAtLimit = true)
             val translations = BoundedMailbox<TranslationJob>()
             audioQueue = windows; translationQueue = translations
             val output = SpeechPlayer().also { player = it }
             val failure = AtomicReference<Exception?>(null)
+            val backlogged = AtomicBoolean(false)
             fun fail(error: Exception) {
                 failure.compareAndSet(null, error)
                 flag.set(true)
@@ -161,7 +188,8 @@ internal class ConversationController(
                         emit(SessionEvent.Source(epoch, block, window.version, text, window.final))
                         val now = System.nanoTime()
                         if (window.final || now - previewAt >= 2_500_000_000L) {
-                            translations.put(TranslationJob(epoch, block, window.version, text, window.final), window.final)
+                            val job = TranslationJob(epoch, block, window.version, text, window.final)
+                            translations.put(job, window.final) { flag.get() }
                             previewAt = now
                         }
                     }
@@ -171,7 +199,13 @@ internal class ConversationController(
             try {
                 translate.start(); recognition.start()
                 val input = AudioCapture(context, models.root, sensitivity, flag,
-                    { windows.put(it, it.final) }, { emit(SessionEvent.Level(it)) },
+                    { window ->
+                        try { windows.put(window, window.final) }
+                        catch (_: MailboxBacklog) {
+                            backlogged.set(true)
+                            capture?.stop()
+                        }
+                    }, { emit(SessionEvent.Level(it)) },
                     {
                         if (!flag.get()) {
                             listening = true
@@ -183,7 +217,10 @@ internal class ConversationController(
                 input.start()
                 input.join()
                 listening = false
-                state("正在确认末尾并完成翻译…")
+                state(
+                    if (backlogged.get()) "收音已停止，正在补完排队的字幕…"
+                    else "正在确认末尾并完成翻译…"
+                )
             } finally {
                 capture?.stop(); capture?.join()
                 windows.finish()
@@ -194,6 +231,7 @@ internal class ConversationController(
             failure.get()?.let { throw SessionFailure(it) }
             check(flag)
             emit(SessionEvent.Finished(epoch))
+            if (backlogged.get()) "收音因处理积压结束。排队音频已处理，已有字幕已保留。" else null
         }
 
     fun text(epoch: Long, text: String, direction: Direction, speak: Boolean) = launch("正在离线翻译…") { flag ->
@@ -209,6 +247,7 @@ internal class ConversationController(
             output.drain(flag)
         }
         emit(SessionEvent.Finished(epoch))
+        null
     }
 
     fun replay(text: String, target: String) = launch("正在生成译音…") { flag ->
@@ -216,6 +255,7 @@ internal class ConversationController(
         val output = SpeechPlayer().also { player = it }
         local.synthesize(text, target, flag) { samples, rate -> output.write(samples, rate, flag) }
         output.drain(flag)
+        null
     }
 
     fun finishCapture() { capture?.stop(); listening = false; state("正在确认末尾…") }

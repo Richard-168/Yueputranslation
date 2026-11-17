@@ -4,6 +4,8 @@ import argparse
 import io
 import sys
 
+from . import APP_NAME
+
 
 def main():
     # Redirected Windows streams use the locale encoding; pythonw may have none.
@@ -11,7 +13,7 @@ def main():
         if isinstance(stream, io.TextIOWrapper):
             stream.reconfigure(encoding="utf-8", errors=stream.errors)
     parser = argparse.ArgumentParser(
-        description="粤普双向翻译（Windows 实验版，默认离线，可选联网增强）"
+        description=f"{APP_NAME}（Windows 实验版，默认离线，可选联网增强）"
     )
     parser.add_argument("--muted", action="store_true", help="生成译音但不播放，用于本地验证")
     args = parser.parse_args()

@@ -69,6 +69,7 @@ from PySide6.QtWidgets import (
     QWidgetAction,
 )
 
+from . import APP_NAME
 from .audio_profile import VOICE_PROFILES, voice_profile
 from .cloud_config import CloudConfig, load_settings
 from .cloud_dialog import CloudDialog
@@ -96,7 +97,6 @@ from .window_chrome import ChromeWindow
 ROOT = DATA_DIR
 NAMES = {"zh": "普通话", "yue": "粤语", "en": "英文"}
 LOGO = Path(__file__).with_name("assets") / "yuepu-logo.png"
-APP_NAME = "粤普随译"
 WELCOME_LINES = (
     (5, "夜深了，想翻译点什么？", "夜喇，想譯啲咩？"),
     (11, "早上好，今天想翻译点什么？", "早晨，今日想譯啲咩？"),
@@ -1687,7 +1687,7 @@ class Window(ChromeWindow):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "导出本次字幕",
-            str(export_directory(self.defaults) / "粤普随译-字幕.txt"),
+            str(export_directory(self.defaults) / f"{APP_NAME}-字幕.txt"),
             "文本文件 (*.txt)",
         )
         if path:
@@ -1810,6 +1810,7 @@ class Window(ChromeWindow):
 
 def main(*, muted=False):
     app = QApplication([])
+    app.setApplicationDisplayName(APP_NAME)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
     window = Window(muted=muted, preload=True)

@@ -18,8 +18,9 @@ internal class MobileUi(val context: Context, val light: Boolean) {
     val background = if (light) Color.WHITE else Color.rgb(25, 25, 25)
     val panel = if (light) Color.rgb(245, 245, 245) else Color.rgb(32, 32, 32)
     val field = if (light) Color.WHITE else Color.rgb(36, 36, 36)
-    val ink = if (light) Color.rgb(32, 32, 32) else Color.rgb(242, 242, 242)
-    val muted = if (light) Color.rgb(97, 97, 97) else Color.rgb(171, 171, 171)
+    val ink = if (light) Color.rgb(25, 25, 25) else Color.rgb(247, 247, 247)
+    val muted = if (light) Color.rgb(97, 97, 97) else Color.rgb(188, 188, 188)
+    val divider = if (light) Color.rgb(222, 222, 222) else Color.rgb(56, 56, 56)
     val border = if (light) Color.rgb(136, 136, 136) else Color.rgb(116, 116, 116)
     val error = if (light) Color.rgb(163, 42, 37) else Color.rgb(255, 180, 174)
     val accent = if (light) Color.rgb(36, 36, 36) else Color.rgb(234, 234, 234)
@@ -46,7 +47,13 @@ internal class MobileUi(val context: Context, val light: Boolean) {
         textSize = size
         setTextColor(color)
         includeFontPadding = false
-        if (strong) setTypeface(typeface, Typeface.BOLD)
+        typeface = Typeface.create(if (strong) "sans-serif-medium" else "sans-serif", Typeface.NORMAL)
+    }
+
+    fun welcome(value: String): TextView = text(value, 28f).apply {
+        typeface = Typeface.create("serif", Typeface.NORMAL)
+        gravity = Gravity.CENTER
+        includeFontPadding = true
     }
 
     fun button(
