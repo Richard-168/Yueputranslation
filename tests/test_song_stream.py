@@ -112,11 +112,71 @@ class SongStreamTests(unittest.TestCase):
             mailbox.put(window)
         with self.assertRaises(SongOverload):
             mailbox.put(confirmed[15])
-        mailbox.finish()
         cancel = threading.Event()
-        for window in confirmed[:16]:
+        for window in confirmed[:15]:
             self.assertIs(mailbox.get(cancel), window)
+        last = mailbox.get(cancel)
+        self.assertIs(last.samples, confirmed[15].samples)
+        self.assertEqual(last.end, confirmed[15].end)
+        self.assertTrue(last.final)
+        mailbox.finish()
         self.assertIsNone(mailbox.get(cancel))
+
+    def test_last_checkpoint_becomes_a_final_at_the_capture_cutoff(self):
+        windows = []
+        stream = RollingAudio(windows.append, context_seconds=4, overlap_seconds=2)
+        stream.feed(np.ones(8 * 16000, dtype=np.float32))
+        checkpoints = [w for w in windows if w.checkpoint]
+        mailbox = SongMailbox(max_finals=2, stop_at_limit=True)
+        mailbox.put(checkpoints[0])
+        with self.assertRaises(SongOverload):
+            mailbox.put(checkpoints[1])
+        mailbox.put(checkpoints[2])
+        cancel = threading.Event()
+        self.assertIs(mailbox.get(cancel), checkpoints[0])
+        last = mailbox.get(cancel)
+        self.assertTrue(last.final)
+        self.assertFalse(last.checkpoint)
+        self.assertEqual((last.block, last.end), (checkpoints[1].block, checkpoints[1].end))
+        self.assertIs(last.samples, checkpoints[1].samples)
+        waiting = threading.Event()
+        result = []
+        original_wait = mailbox.condition.wait
+
+        def signal_and_wait(timeout):
+            waiting.set()
+            return original_wait(timeout)
+
+        with patch.object(mailbox.condition, "wait", side_effect=signal_and_wait):
+            consumer = threading.Thread(target=lambda: result.append(mailbox.get(cancel)))
+            consumer.start()
+            try:
+                self.assertTrue(waiting.wait(1))
+                self.assertEqual(result, [])
+            finally:
+                mailbox.finish()
+                consumer.join(1)
+        self.assertEqual(result, [None])
+
+    def test_late_input_omits_previews_but_preserves_checkpoint_and_final_audio(self):
+        audio = np.linspace(0.1, 0.9, 5 * 16000, dtype=np.float32)
+        all_windows, recovered = [], []
+        a = RollingAudio(all_windows.append, context_seconds=4, overlap_seconds=2, first_seconds=1)
+        b = RollingAudio(recovered.append, context_seconds=4, overlap_seconds=2, first_seconds=1)
+        b.defer_drafts = True
+        a.feed(audio)
+        b.feed(audio)
+        a.flush()
+        b.flush()
+        self.assertLess(len(recovered), len(all_windows))
+        self.assertTrue(any(w.checkpoint for w in recovered))
+        self.assertTrue(recovered[-1].final)
+        expected = [w for w in all_windows if w.final or w.checkpoint]
+        self.assertEqual(
+            [(w.start, w.end) for w in expected], [(w.start, w.end) for w in recovered]
+        )
+        for wanted, actual in zip(expected, recovered, strict=True):
+            np.testing.assert_array_equal(wanted.samples, actual.samples)
 
     def test_waiting_confirmation_wakes_when_space_opens_or_production_ends(self):
         windows = []

@@ -1,5 +1,7 @@
 # 粤普同传 Windows 本地安装包
 
+有完整安装程序和分卷时，可在干净的一次性 Windows x64 虚拟机中运行 `.\installer\windows\verify_install_in_vm.ps1 -Installer <安装程序路径> -Evidence <日志目录> -DisposableVM`。此检查使用独立安装目录，核对当前用户的卸载登记、开始菜单快捷方式和随包运行环境，最后实际执行卸载并保留日志。
+
 使用 Inno Setup 6 制作包含应用、私有 Python 3.12 运行环境、基础离线模型、pro 复核和文件人声分离模型的 x64 开发预览。此流程只在本地生成文件，不上传、签名、修改系统 Python 或设置全局 PATH。
 
 从仓库根目录、已准备好 `[offline]` 依赖和模型的 Python 3.12 x64 环境执行：

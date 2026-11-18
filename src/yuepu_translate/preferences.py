@@ -7,6 +7,7 @@ from pathlib import Path
 from PySide6.QtCore import QSettings
 
 from .audio_profile import DEFAULT_SENSITIVITY, voice_profile
+from .paths import ASR_MODEL, ASR_PROJECTOR, DATA_DIR, MT_MODEL
 
 
 def settings_store():
@@ -26,6 +27,7 @@ class Preferences:
     vocals: bool = False
     cache_directory: str = ""
     export_directory: str = ""
+    mute_mic_during_playback: bool = False
 
     def validate(self):
         voice_profile(self.sensitivity)
@@ -39,7 +41,10 @@ class Preferences:
                 raise ValueError("无效的首选项：" + name)
         if type(self.font_size) is not int or not 12 <= self.font_size <= 24:
             raise ValueError("字幕字号须在 12–24 之间。")
-        if any(type(getattr(self, name)) is not bool for name in ("autoplay", "smooth", "vocals")):
+        if any(
+            type(getattr(self, name)) is not bool
+            for name in ("autoplay", "smooth", "vocals", "mute_mic_during_playback")
+        ):
             raise ValueError("无效的开关首选项。")
         for name in ("cache_directory", "export_directory"):
             value = getattr(self, name)
@@ -56,7 +61,7 @@ def load_preferences(settings=None):
         value = settings.value("defaults/" + field.name, getattr(defaults, field.name))
         if field.name == "mode" and value == "paragraph":
             value = "pro"
-        if field.name in {"autoplay", "smooth", "vocals"}:
+        if field.name in {"autoplay", "smooth", "vocals", "mute_mic_during_playback"}:
             if value in (True, "true", "1", 1):
                 value = True
             elif value in (False, "false", "0", 0):
@@ -66,6 +71,18 @@ def load_preferences(settings=None):
         elif field.name == "font_size":
             value = int(value)
         values[field.name] = value
+    if (DATA_DIR / MT_MODEL).is_file():
+        if not settings.contains("defaults/mode") and not all(
+            (DATA_DIR / asset).is_file() for asset in (ASR_MODEL, ASR_PROJECTOR)
+        ):
+            values["mode"] = "flash"
+        if not settings.contains("defaults/autoplay"):
+            voice = (
+                "models/tts-zh/model.int8.onnx"
+                if values["direction"] == "yue"
+                else "models/canto/browser_poc_manifest.json"
+            )
+            values["autoplay"] = (DATA_DIR / voice).is_file()
     return Preferences(**values).validate()
 
 

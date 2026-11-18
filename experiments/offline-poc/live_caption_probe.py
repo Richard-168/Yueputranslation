@@ -201,7 +201,6 @@ def main():
             window.engine.zh_tts = model_runtime.mandarin_engine()
         else:
             window.engine.yue_tts = model_runtime.canto_engine()
-    window.ready = True
     window.direction_box.setCurrentIndex(0 if args.source == "yue" else 1)
     window.source_box.setCurrentIndex(int(args.device))
     window.profile_box.setCurrentIndex(int(args.profile == "pro"))
@@ -252,9 +251,9 @@ def main():
         )
         return text
 
-    def translate(model, text, cancel):
+    def translate(model, text, cancel, **kwargs):
         begin = time.perf_counter()
-        result = original_translate(model, text, cancel)
+        result = original_translate(model, text, cancel, **kwargs)
         inference_calls.append(
             dict(
                 kind="translation",
@@ -305,18 +304,24 @@ def main():
                         wait = timing["start"] + (offset + size) / rate - time.monotonic()
                         if wait > 0:
                             self.stop_event.wait(wait)
+                    feed_done.set()
+                    self.stop_event.wait()
                     self.processor.flush()
                 except Exception as exc:
                     capture_errors.append(str(exc))
                     self.error(str(exc))
                 finally:
                     feed_done.set()
+                    self.on_finished()
 
             self.thread = threading.Thread(target=feed, daemon=True)
             self.thread.start()
 
-        def stop(self):
+        def request_stop(self):
             self.stop_event.set()
+
+        def stop(self):
+            self.request_stop()
             if self.thread:
                 self.thread.join(4)
 

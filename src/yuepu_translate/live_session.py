@@ -6,7 +6,7 @@ from dataclasses import dataclass
 
 from .audio_profile import DEFAULT_SENSITIVITY
 from .enhanced_inference import SessionInference
-from .inference_control import check_cancel
+from .inference_control import LiveSpeech, check_cancel
 from .paragraphs import ParagraphRevision, accept_punctuation
 from .song_stream import RollingAudio, SongMailbox
 from .translation_state import IncrementalTranslation
@@ -60,12 +60,13 @@ class LiveSession:
         translations = SongMailbox()
         failures = []
         confirmed_count = partial_count = 0
+        speech = LiveSpeech(self, engine, player, cancel, emit)
 
         def translate():
             inference = None
             try:
                 inference = SessionInference(
-                    self.source, self.cloud_config, emit, roles=("translation",)
+                    self.source, self.cloud_config, emit, roles=("translation",), engine=engine
                 )
                 inference.start(cancel)
                 translated_block, state, preview_at = -1, None, 0
@@ -107,22 +108,18 @@ class LiveSession:
                             lag_seconds=time.monotonic() - job.captured_at,
                         ),
                     )
-                    if job.final and self.autoplay:
-                        engine.speak(
-                            target,
-                            "zh" if self.source == "yue" else "yue",
-                            self.number_mode,
-                            player,
-                            cancel,
-                            lambda: None,
-                        )
+                    if job.final:
+                        speech.submit(target)
             except Exception as exc:
                 failures.append(exc)
                 cancel.set()
                 self.mailbox.finish()
             finally:
-                if inference is not None:
-                    inference.close()
+                try:
+                    if inference is not None:
+                        inference.close()
+                finally:
+                    speech.finish()
 
         worker = threading.Thread(target=translate, name="live-translation", daemon=True)
         block, text, version, covered_end = -1, "", 0, -1
@@ -190,6 +187,7 @@ class LiveSession:
                         lag_seconds=time.monotonic() - window.captured_at,
                     ),
                 )
+                speech.prepare()
                 if window.final or not (
                     self.mailbox.has_waiting_confirmation()
                     or translations.has_waiting_confirmation()

@@ -1,6 +1,6 @@
 """Bounded, session-only paired transcript shared by the Qt view and exporter."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 
 from PySide6.QtCore import QAbstractListModel, QModelIndex, Qt
@@ -18,10 +18,26 @@ class TranscriptEntry:
     revision: int = 0
     source_confirmed: int = 0
     target_confirmed: int = 0
+    # Source versions are live events. Restored rough translations have no version evidence.
+    target_current: bool = field(default=False, compare=False)
 
     def __post_init__(self):
         if not self.timestamp:
             self.timestamp = datetime.now().strftime("%H:%M:%S")
+
+    @property
+    def is_capture_notice(self):
+        return self.status == "收音中断" and not self.source_language and not self.target_language
+
+    @property
+    def translation_is_final(self):
+        return self.status in {"已确认", "已翻译"}
+
+    @property
+    def replay_text(self):
+        if self.translation_is_final or self.target_current:
+            return self.target
+        return self.target[: self.target_confirmed]
 
 
 class TranscriptModel(QAbstractListModel):
@@ -44,6 +60,8 @@ class TranscriptModel(QAbstractListModel):
         if not index.isValid() or not 0 <= index.row() < len(self.items):
             return None
         item = self.items[index.row()]
+        if item.is_capture_notice and role in (Qt.AccessibleTextRole, Qt.DisplayRole):
+            return f"{item.timestamp}  收音中断\n{item.source}"
         if role == Qt.AccessibleTextRole:
             return (
                 f"{item.timestamp}  {item.source}\n{item.target or item.status}\n"
@@ -74,9 +92,18 @@ class TranscriptModel(QAbstractListModel):
         item = self.by_key.get(key)
         if item is None:
             return False
-        allowed = {"source", "target", "status", "source_confirmed", "target_confirmed"}
+        allowed = {
+            "source",
+            "target",
+            "status",
+            "source_confirmed",
+            "target_confirmed",
+            "target_current",
+        }
         if set(fields) - allowed:
             raise ValueError("无效字幕字段")
+        if "target_current" in fields and type(fields["target_current"]) is not bool:
+            raise ValueError("无效译文版本")
         new_source, new_target = (
             fields.get("source", item.source),
             fields.get("target", item.target),
@@ -87,6 +114,8 @@ class TranscriptModel(QAbstractListModel):
             value = fields.get(name, getattr(item, name))
             if isinstance(value, bool) or not isinstance(value, int) or not 0 <= value <= len(text):
                 raise ValueError("固定前文长度必须在字幕范围内")
+        if new_source != item.source and "target_current" not in fields:
+            fields["target_current"] = False
         self.characters += len(new_source) + len(new_target) - len(item.source) - len(item.target)
         for name, value in fields.items():
             setattr(item, name, value)
@@ -144,8 +173,23 @@ class TranscriptModel(QAbstractListModel):
     def export_text(self, entries=None):
         names = {"zh": "普通话", "yue": "粤语", "en": "英文"}
         rows = self.items if entries is None else entries
-        return "\n\n".join(
-            f"[{item.timestamp}] {names.get(item.source_language, item.source_language)} → {names.get(item.target_language, item.target_language)}\n"
-            f"原文：{item.source}\n译文：{item.target or '[' + item.status + ']'}"
-            for item in rows
-        )
+        lines = []
+        for item in rows:
+            if item.is_capture_notice:
+                lines.append(f"[{item.timestamp}] 收音中断\n{item.source}")
+                continue
+            source = names.get(item.source_language, item.source_language)
+            target = names.get(item.target_language, item.target_language)
+            final = item.translation_is_final
+            text = f"[{item.timestamp}] {source} → {target}\n原文：{item.source}"
+            if item.target and not final and not item.target_current:
+                fixed = item.replay_text
+                text += f"\n译文：{fixed + ' [仅已固定前文]' if fixed else '[当前原文译文未确认]'}"
+                if len(fixed) < len(item.target):
+                    text += f"\n此前的译文草稿（与本版原文未核对）：{item.target}"
+            else:
+                text += f"\n译文：{item.target or '[' + item.status + ']'}"
+            if item.target and not final:
+                text += f"\n状态：{item.status}"
+            lines.append(text)
+        return "\n\n".join(lines)

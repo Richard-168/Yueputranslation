@@ -139,6 +139,12 @@ class SettingsDialog(QDialog):
         playback.addWidget(self.autoplay)
         playback.addWidget(self._label("设备收音期间只显示字幕。", "dialogHint"), 1)
         general.addRow(playback)
+        self.mute_mic_during_playback = QCheckBox("使用扬声器时，播报译音期间暂停拾音")
+        self.mute_mic_during_playback.setChecked(preferences.mute_mic_during_playback)
+        general.addRow(self.mute_mic_during_playback)
+        general.addRow(
+            self._label("仅对麦克风自动播报生效。播报期间对方同时说的话也会跳过。", "dialogHint")
+        )
         self.mode.setToolTip("pro 先显示原文和粗译，句末复核时使用 song-asr-large 模型。")
 
         reading = page("阅读与播报")
@@ -263,6 +269,7 @@ class SettingsDialog(QDialog):
             audio_source=self.audio_source.currentData(),
             sensitivity=self.sensitivity.currentData(),
             autoplay=self.autoplay.isChecked(),
+            mute_mic_during_playback=self.mute_mic_during_playback.isChecked(),
             font_size=self.font_size.value(),
             smooth=self.smooth.isChecked(),
             number_mode=self.numbers.currentData(),

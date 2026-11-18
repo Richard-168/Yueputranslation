@@ -90,11 +90,12 @@ from .preferences import (
 from .session_history import SessionHistory, SessionHistoryConflict, SessionHistoryError
 from .settings_dialog import SettingsDialog
 from .song_pipeline import SongFile, SongSession, make_song_stream
-from .song_stream import SongOverload
+from .song_stream import RATE, SongOverload
 from .transcript_model import TranscriptEntry, TranscriptModel
 from .window_chrome import ChromeWindow
 
 ROOT = DATA_DIR
+WAITING_FOR_AUDIO = "音源已打开，但尚未收到新的音频包。请检查输入设备或播放来源。"
 NAMES = {"zh": "普通话", "yue": "粤语", "en": "英文"}
 LOGO = Path(__file__).with_name("assets") / "yuepu-logo.png"
 WELCOME_LINES = (
@@ -130,7 +131,12 @@ class PairDelegate(QStyledItemDelegate):
         active = entry.status in {"识别中", "翻译中"}
         source = entry.source or ("正在识别…" if active else "未完成有效语句识别")
         target = entry.target or (entry.status + "…" if active else entry.status)
-        for text, confirmed in ((source, entry.source_confirmed), (target, entry.target_confirmed)):
+        columns = (
+            [(entry.source, len(entry.source))]
+            if entry.is_capture_notice
+            else [(source, entry.source_confirmed), (target, entry.target_confirmed)]
+        )
+        for text, confirmed in columns:
             doc = QTextDocument()
             doc.setDocumentMargin(0)
             doc.setDefaultFont(QFont("Microsoft YaHei UI", self.font_size, QFont.Weight.Medium))
@@ -143,7 +149,7 @@ class PairDelegate(QStyledItemDelegate):
             draft.setForeground(QColor(self.colors["draft"]))
             cursor.insertText(text[:confirmed], fixed)
             cursor.insertText(text[confirmed:], draft)
-            doc.setTextWidth(max(80, (width // 2) - 36))
+            doc.setTextWidth(max(80, width // len(columns) - 36))
             docs.append(doc)
         height = max(72, int(max(d.size().height() for d in docs)) + 43)
         self.cache[key] = (docs, height)
@@ -177,31 +183,40 @@ class PairDelegate(QStyledItemDelegate):
             rect, QColor(self.colors["selected"] if selected else self.colors["paper"])
         )
         middle = rect.left() + rect.width() // 2
-        if not selected:
+        if not selected and not entry.is_capture_notice:
             painter.fillRect(
                 middle, rect.top(), rect.width() // 2, rect.height(), QColor(self.colors["target"])
             )
-        else:
+        elif selected:
             painter.fillRect(rect.left(), rect.top(), 3, rect.height(), QColor(self.colors["text"]))
         painter.setPen(QColor(self.colors["border"]))
-        painter.drawLine(middle, rect.top(), middle, rect.bottom())
+        if not entry.is_capture_notice:
+            painter.drawLine(middle, rect.top(), middle, rect.bottom())
         painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
         metadata_font = QFont("Microsoft YaHei UI")
         metadata_font.setPixelSize(15)
         painter.setFont(metadata_font)
         painter.setPen(QColor(self.colors["muted"]))
+        source_label = (
+            "收音中断"
+            if entry.is_capture_notice
+            else NAMES.get(entry.source_language, entry.source_language)
+        )
         painter.drawText(
             rect.left() + 16,
             rect.top() + 20,
-            f"{entry.timestamp}   ·   {NAMES.get(entry.source_language, entry.source_language)}",
+            f"{entry.timestamp}   ·   {source_label}",
         )
         painter.setPen(QColor(self.colors["muted"]))
-        painter.drawText(
-            middle + 16,
-            rect.top() + 20,
-            f"{NAMES.get(entry.target_language, entry.target_language)}   ·   {entry.status}",
-        )
-        for x, doc, is_target in ((rect.left() + 16, docs[0], False), (middle + 16, docs[1], True)):
+        if not entry.is_capture_notice:
+            painter.drawText(
+                middle + 16,
+                rect.top() + 20,
+                f"{NAMES.get(entry.target_language, entry.target_language)}   ·   {entry.status}",
+            )
+        for index, doc in enumerate(docs):
+            is_target = index == 1
+            x = (middle if is_target else rect.left()) + 16
             painter.save()
             painter.translate(x, rect.top() + 28)
             context = doc.documentLayout().PaintContext()
@@ -373,7 +388,7 @@ class AudioOptionsMenu(QMenu):
 
 
 class Window(ChromeWindow):
-    def __init__(self, muted=False, *, history=None, preload=False):
+    def __init__(self, muted=False, *, history=None):
         super().__init__()
         self.preferences = settings_store()
         preference_warning = ""
@@ -391,8 +406,10 @@ class Window(ChromeWindow):
         self.jobs = queue.Queue(maxsize=2)
         self.cancel = threading.Event()
         self.engine = Engine()
+        self.playback_token = None
         self.player = AudioPlayer(
-            lambda message: self.events.put((self.epoch, 0, "audio_error", message)), muted=muted
+            lambda message: self.events.put((self.epoch, 0, "audio_error", (None, message))),
+            muted=muted,
         )
         self.microphone = None
         self.song_session = None
@@ -412,12 +429,10 @@ class Window(ChromeWindow):
             cloud_warning = str(exc)
         self.epoch = self.pending = 0
         self.sequence = 0
-        self.ready = self.listening = self.closing = False
-        self.loading = False
-        self.startup_notice = ""
+        self.listening = self.closing = False
         self.capture_started = False
-        self.capture_backlogged = False
-        self.after_load = None
+        self.capture_waiting = False
+        self.capture_notice = ""
         self.model = TranscriptModel()
         self.active_ids = set()
         self.unread = 0
@@ -449,10 +464,6 @@ class Window(ChromeWindow):
         elif preference_warning:
             self.status(preference_warning, True)
         self.refresh_history()
-        if preload:
-            if self.status_label.property("severity") == "error":
-                self.startup_notice = self.status_label.text()
-            QTimer.singleShot(0, self, self.load)
 
     def button(self, text, callback, kind="", parent=None):
         button = QPushButton(text, parent)
@@ -572,7 +583,9 @@ class Window(ChromeWindow):
         self.latest_button.hide()
         toolbar.addWidget(self.latest_button)
         self.replay_button = self.button("播报", self.replay, "quiet")
-        self.replay_button.setToolTip("播报选中的译文；未选中时播报最后一句")
+        self.replay_button.setToolTip(
+            "播报选中的译文，未选中时播报最后一句。译稿与当前原文未核对时，仅播报已固定前文。"
+        )
         toolbar.addWidget(self.replay_button)
         self.copy_button = self.button("复制", self.copy_records, "quiet")
         self.copy_button.setToolTip("复制选中的字幕；未选中时复制全部")
@@ -930,6 +943,8 @@ class Window(ChromeWindow):
         self.refresh_history()
 
     def switch_session(self, session_id, entries):
+        self.playback_token = None
+        self.player.stop()
         self.delegate.cache.clear()
         self.delegate.heights.clear()
         self.view.animation.stop()
@@ -1029,44 +1044,19 @@ class Window(ChromeWindow):
         self.settings_button.setEnabled(not self.closing)
         self.preferences_action.setEnabled(idle)
         self.cloud_action.setEnabled(idle)
-        self.input.setReadOnly(self.after_load is not None or self.closing)
+        self.input.setReadOnly(self.closing)
         self.translate_button.setEnabled(can_submit and has_text)
         self.replay_button.setEnabled(
-            can_submit and bool(entries := self.selected_entries()) and bool(entries[-1].target)
+            can_submit
+            and bool(entries := self.selected_entries())
+            and bool(entries[-1].replay_text)
         )
         self.clear_button.setEnabled(idle and bool(self.model.items))
         self.copy_button.setEnabled(bool(self.model.items))
         self.export_button.setEnabled(bool(self.model.items))
 
     def can_start_task(self):
-        return (
-            not self.listening
-            and not self.closing
-            and self.after_load is None
-            and (not self.pending or self.loading)
-        )
-
-    def prepare_for(self, action):
-        if not self.can_start_task():
-            return False
-        if self.ready and not self.loading:
-            return True
-        self.after_load = action
-        if self.loading:
-            self._buttons()
-        else:
-            self.load()
-        return False
-
-    def load(self):
-        if self.ready or self.pending or self.closing:
-            return
-        self.cancel.clear()
-        self.loading = True
-        self.pending += 1
-        self.jobs.put_nowait((self.epoch, 0, "load"))
-        self.status("正在加载并预热离线模型，首次可能需要几十秒…")
-        self._buttons()
+        return not self.listening and not self.closing and not self.pending
 
     def _change_transcript(self, callback, new=False):
         follow = self.view.follow_tail
@@ -1082,8 +1072,14 @@ class Window(ChromeWindow):
 
         QTimer.singleShot(0, settle)
 
+    def _queue_task(self, key, request):
+        token = object()
+        self.jobs.put_nowait((self.epoch, key, request, token))
+        self.playback_token = token
+        self.pending += 1
+
     def submit(self, request):
-        if not self.ready or self.closing:
+        if self.closing:
             return False
         if self.listening and self.source_box.currentIndex() == 1:
             if request.kind == "speak":
@@ -1092,12 +1088,11 @@ class Window(ChromeWindow):
         self.sequence += 1
         key = self.sequence
         try:
-            self.jobs.put_nowait((self.epoch, key, request))
+            self._queue_task(key, request)
         except queue.Full:
             self.stop()
             self.status("待处理语句过多，已停止收音。请暂停来源后重试。", True)
             return False
-        self.pending += 1
         if request.kind != "speak":
             self.active_ids.add(key)
             target = "zh" if request.source == "yue" else "yue"
@@ -1119,8 +1114,6 @@ class Window(ChromeWindow):
         if not text or len(text) > 120:
             self.status("请输入 1–120 字。", True)
             self.input.setFocus()
-            return
-        if not self.prepare_for(self.translate_input):
             return
         self.cancel.clear()
         self.status("正在翻译…")
@@ -1147,7 +1140,7 @@ class Window(ChromeWindow):
                 str(ROOT),
                 "歌曲音频 (*.mp3 *.wav *.flac *.ogg)" if song else "WAV 音频 (*.wav)",
             )
-        if path and self.prepare_for(partial(self.open_audio, path)):
+        if path:
             self.cancel.clear()
             if song:
                 try:
@@ -1163,8 +1156,7 @@ class Window(ChromeWindow):
                 self.song_keys.clear()
                 self.song_final_block = -1
                 self.song_session = task
-                self.pending += 1
-                self.jobs.put_nowait((self.epoch, 0, task))
+                self._queue_task(0, task)
                 self.status("正在准备歌曲文件处理…")
                 self._buttons()
                 return
@@ -1191,24 +1183,20 @@ class Window(ChromeWindow):
         if not self.can_start_task():
             return
         entries = self.selected_entries()
-        if not entries or not entries[-1].target:
+        if not entries or not entries[-1].replay_text:
             return
         item = entries[-1]
 
-        def play():
-            self.cancel.clear()
-            self.submit(
-                Request(
-                    self.epoch,
-                    "speak",
-                    source=item.target_language,
-                    text=item.target,
-                    number_mode=self.number_mode,
-                )
+        self.cancel.clear()
+        self.submit(
+            Request(
+                self.epoch,
+                "speak",
+                source=item.target_language,
+                text=item.replay_text,
+                number_mode=self.number_mode,
             )
-
-        if self.prepare_for(play):
-            play()
+        )
 
     def toggle_capture(self):
         if self.listening:
@@ -1219,21 +1207,21 @@ class Window(ChromeWindow):
                 self.listening = False
                 self.capture_started = False
                 if self.microphone:
-                    self.microphone.stop()
-                    self.microphone = None
-                self.song_session.mailbox.finish()
+                    self.microphone.request_stop()
+                else:
+                    self.song_session.mailbox.finish()
                 self.status("正在确认末尾字幕…")
                 self._buttons()
             else:
                 self.stop()
             return
-        if not self.prepare_for(self.toggle_capture):
+        if not self.can_start_task():
             return
         self.cancel.clear()
         self.listening = True
         self.capture_started = False
-        self.capture_backlogged = False
-        epoch = self.epoch
+        self.capture_waiting = False
+        self.capture_notice = ""
         source, auto, mode = self.source_language(), self.auto_box.isChecked(), self.number_mode
         self.player.stop()
         self.song_keys.clear()
@@ -1254,8 +1242,7 @@ class Window(ChromeWindow):
                 number_mode=mode,
                 cloud=self.cloud_config if self.cloud_enabled else None,
             )
-        self.pending += 1
-        self.jobs.put_nowait((epoch, 0, self.song_session))
+        self._queue_task(0, self.song_session)
         self.status(
             "正在准备精细收音…"
             if isinstance(self.song_session, SongSession)
@@ -1277,17 +1264,24 @@ class Window(ChromeWindow):
         def started(name):
             self.events.put((epoch, 0, "capture_started", name))
 
+        saturated = False
+
         def segment(window):
+            nonlocal saturated
+            if saturated:
+                return
             try:
                 session.mailbox.put(window)
             except SongOverload:
-                # The capture mailbox kept the last admitted window. Close it
-                # without cancelling either inference lane.
-                self.events.put((epoch, 0, "capture_saturated", session))
-                session.mailbox.finish()
+                # The last window is already in the queue. Its end is the last
+                # input position available to the consumer.
+                saturated = True
+                message = f"待确认的字幕已满，接收到收音后 {window.end / RATE:.2f} 秒。此后的声音未纳入本次字幕。"
+                self.events.put((epoch, 0, "capture_interrupted", (session, message)))
+                capture.request_stop()
 
         if self.source_box.currentIndex() == 1:
-            self.microphone = SystemAudio(
+            capture = SystemAudio(
                 segment,
                 error,
                 started,
@@ -1295,14 +1289,29 @@ class Window(ChromeWindow):
                 segmenter_factory=factory,
             )
         else:
-            self.microphone = Microphone(
+            capture = Microphone(
                 segment,
                 error,
                 paragraph=True,
                 segmenter_factory=factory,
                 started=started,
             )
-        self.microphone.start()
+            if session.autoplay and self.defaults.mute_mic_during_playback:
+                capture.playback_intervals = self.player.playback_intervals
+
+        def finished():
+            self.events.put((epoch, 0, "capture_finished", capture))
+            session.mailbox.finish()
+
+        capture.on_interrupted = lambda report: self.events.put(
+            (epoch, 0, "capture_interrupted", (session, report.message))
+        )
+        capture.on_finished = finished
+        capture.on_waiting = lambda waiting: self.events.put(
+            (epoch, 0, "capture_waiting", (session, waiting))
+        )
+        self.microphone = capture
+        capture.start()
         self.status("正在打开音源…")
 
     def _song_key(self, block):
@@ -1317,17 +1326,29 @@ class Window(ChromeWindow):
             self._change_transcript(lambda: self.model.append(entry), new=True)
         return self.song_keys[block]
 
+    def _save_capture_notice(self):
+        if self.capture_notice:
+            self.sequence += 1
+            entry = TranscriptEntry(
+                self.sequence, "", "", source=self.capture_notice, status="收音中断"
+            )
+            self._change_transcript(lambda: self.model.append(entry), new=True)
+            self.capture_notice = ""
+
     def stop(self):
         self.cancel.set()
-        self.epoch += 1
-        self.loading = False
+        self.playback_token = None
+        self.capture_waiting = False
         self.listening = False
         self.capture_started = False
-        self.capture_backlogged = False
-        self.after_load = None
         if self.microphone:
             self.microphone.stop()
             self.microphone = None
+        # Commit results published before this cutoff, including any interruption
+        # reported as the capture owner exits. Do not start another device or job.
+        self._consume_events(self.events.qsize(), stopping=True)
+        self.epoch += 1
+        self._save_capture_notice()
         if self.song_session is not None:
             if isinstance(self.song_session, (SongSession, LiveSession)):
                 self.song_session.mailbox.finish()
@@ -1342,7 +1363,7 @@ class Window(ChromeWindow):
                 break
         for key in tuple(self.active_ids):
             item = self.model.by_key.get(key)
-            if item and item.status != "已确认":
+            if item and item.status not in {"已确认", "已翻译"}:
                 self.model.update_entry(
                     key, status="已取消" if not item.target else "暂定 · 已停止"
                 )
@@ -1359,28 +1380,34 @@ class Window(ChromeWindow):
         while True:
             job = self.jobs.get()
             if job is None:
-                self.jobs.task_done()
+                try:
+                    self.engine.close()
+                finally:
+                    self.jobs.task_done()
                 return
-            epoch, key, payload = job
+            epoch, key, payload, token = job
 
             def emit(kind, value, epoch=epoch, key=key):
                 self.events.put((epoch, key, kind, value))
 
             try:
-                if payload == "load":
-                    self.engine.load(self.cancel, lambda message: emit("status", message))
-                    emit("ready", True)
-                elif isinstance(payload, (SongSession, LiveSession)):
-                    payload.run(self.engine, self.player, self.cancel, emit)
+                output = self.player.for_task(
+                    lambda message, token=token, emit=emit: emit("audio_error", (token, message))
+                )
+                if isinstance(payload, (SongSession, LiveSession)):
+                    if not isinstance(payload, SongFile):
+                        emit("status", "正在准备语音识别…")
+                        self.engine.prepare_recognition(self.cancel)
+                    payload.run(self.engine, output, self.cancel, emit)
                 elif self.cloud_enabled and payload.kind in {"text", "file"}:
                     from .enhanced_inference import process_short_request
 
                     process_short_request(
-                        payload, self.cloud_config, self.engine, self.player, self.cancel, emit
+                        payload, self.cloud_config, self.engine, output, self.cancel, emit
                     )
                     emit("done", True)
                 else:
-                    self.engine.process(payload, self.cancel, self.player, emit)
+                    self.engine.process(payload, self.cancel, output, emit)
                     emit("done", True)
             except (Cancelled, InferenceCancelled):
                 pass
@@ -1389,28 +1416,51 @@ class Window(ChromeWindow):
             except Exception:
                 emit("error", "本次处理失败，请停止后重试。")
             finally:
-                self.events.put((epoch, key, "finished", "load" if payload == "load" else None))
+                self.events.put((epoch, key, "finished", None))
                 self.jobs.task_done()
 
-    def poll(self):
-        for _ in range(160):
+    def _consume_events(self, limit, *, stopping=False):
+        for _ in range(limit):
             try:
                 epoch, key, kind, value = self.events.get_nowait()
             except queue.Empty:
                 break
             if kind == "finished":
                 self.pending = max(0, self.pending - 1)
-                self.active_ids.discard(key)
-                if value == "load":
-                    self.loading = False
+                if not stopping and epoch == self.epoch:
+                    self.active_ids.discard(key)
                 continue
             if epoch != self.epoch:
                 continue
-            if kind == "ready":
-                self.ready = True
-                notice, self.startup_notice = self.startup_notice, ""
-                self.status(notice, bool(notice))
-            elif kind == "network_state":
+            if stopping and kind not in {
+                "source",
+                "translation",
+                "live_source",
+                "live_translation",
+                "live_empty",
+                "song_source",
+                "song_translation",
+                "song_empty",
+                "capture_interrupted",
+            }:
+                continue
+            if (
+                kind in {"translation", "song_translation", "live_translation"}
+                and self.engine.translator.using_completion
+                and self.network_mode in {"offline", "fallback"}
+            ):
+                detail = (
+                    "系统限制了本机服务连接。Hy-MT2 正通过离线程序逐次翻译，每句需要重新加载模型。"
+                )
+                self.network_pill.setText(
+                    "本地回退 · 逐句翻译" if self.network_mode == "fallback" else "本地逐句翻译"
+                )
+                note = self.network_pill.toolTip()
+                if detail not in note:
+                    self.network_pill.setToolTip(
+                        note + "\n" + detail if self.network_mode == "fallback" else detail
+                    )
+            if kind == "network_state":
                 mode = value["mode"]
                 self.network_mode = mode
                 self.source_changed()
@@ -1442,6 +1492,7 @@ class Window(ChromeWindow):
                         key,
                         target=value["text"],
                         target_confirmed=len(value["text"]),
+                        target_current=True,
                         status="已翻译",
                     )
                 )
@@ -1462,6 +1513,12 @@ class Window(ChromeWindow):
                     if self.source_box.currentIndex() == 0
                     else f"正在翻译设备声音 · {value}（仅字幕）"
                 )
+            elif kind == "capture_waiting" and value[0] is self.song_session and self.listening:
+                self.capture_waiting = value[1]
+                if self.capture_waiting:
+                    self.status(WAITING_FOR_AUDIO)
+                elif self.status_label.text() == WAITING_FOR_AUDIO:
+                    self.status("已恢复接收音频。")
             elif kind == "song_ready":
                 self._start_song_capture()
             elif kind == "live_source":
@@ -1483,8 +1540,9 @@ class Window(ChromeWindow):
                 )
                 self.status("原文已确认，正在翻译…" if value["final"] else "原文实时更新中…")
                 self.status_label.setToolTip(
-                    f"本次识别 {value['recognition_seconds']:.2f} 秒；"
-                    f"音频快照末尾至原文返回 {value['lag_seconds']:.2f} 秒，不含攒帧和本次绘制。"
+                    f"本次识别 {value['recognition_seconds']:.2f} 秒。"
+                    f"从窗口最后一包的采集回调到原文返回约 {value['lag_seconds']:.2f} 秒，"
+                    "含采集队列等待，不含设备内部延迟和界面绘制。"
                 )
             elif kind == "live_translation":
                 block = value["block"]
@@ -1511,6 +1569,11 @@ class Window(ChromeWindow):
                             row_key,
                             target=value["text"],
                             target_confirmed=0,
+                            target_current=(
+                                value["version"] == current_version
+                                and value.get("source", item.source) == item.source
+                                and value.get("tail_current", True)
+                            ),
                             status="粗略译文 · 待复核",
                         )
                     )
@@ -1532,6 +1595,7 @@ class Window(ChromeWindow):
                             row_key,
                             target=frozen_target,
                             target_confirmed=len(frozen_target),
+                            target_current=False,
                             status="前文已固定 · 末尾更新中",
                         )
                     )
@@ -1541,6 +1605,7 @@ class Window(ChromeWindow):
                         row_key,
                         target=value["text"],
                         target_confirmed=len(frozen_target),
+                        target_current=value["final"] or value.get("tail_current", True),
                         status="已确认" if value["final"] else "末尾更新中",
                     )
                 )
@@ -1578,6 +1643,7 @@ class Window(ChromeWindow):
                         row_key,
                         target=value["text"],
                         target_confirmed=len(value.get("frozen_target", "")),
+                        target_current=True,
                         status=(
                             "已确认"
                             if value["final"]
@@ -1610,6 +1676,7 @@ class Window(ChromeWindow):
                         target=value.get("target", ""),
                         source_confirmed=len(value.get("source", "")),
                         target_confirmed=len(value.get("target", "")),
+                        target_current=True,
                         status="前文已固定 · 末尾未确认"
                         if value.get("partial")
                         else "未检测到新内容",
@@ -1618,14 +1685,14 @@ class Window(ChromeWindow):
                     self.song_keys.pop(value["block"], None)
             elif kind == "song_drained":
                 self.song_session = None
-                if self.capture_backlogged:
-                    self.capture_backlogged = False
+                if self.capture_notice:
                     for row_key in self.song_keys.values():
                         if row_key in self.active_ids and self.model.by_key.get(row_key):
                             self.model.update_entry(row_key, status="末尾未确认 · 收音已停止")
                         self.active_ids.discard(row_key)
                     self.song_keys.clear()
-                    self.status("收音因处理积压结束。排队音频已处理，已有字幕已保留。")
+                    self.status("已处理排队音频，字幕和收音中断位置已记入会话。")
+                    self._save_capture_notice()
                 else:
                     self.status(
                         "已有字幕已保留，部分末尾没有有效识别结果，尚未确认。"
@@ -1634,14 +1701,37 @@ class Window(ChromeWindow):
                         if isinstance(value, dict) and not value.get("confirmed_count")
                         else "末尾字幕已确认 · 本次记录已保留，可回看或导出。"
                     )
-            elif kind == "capture_saturated" and value is self.song_session:
-                self.capture_backlogged = True
+            elif kind == "capture_interrupted" and value[0] is self.song_session:
+                self.capture_notice = self.capture_notice or value[1]
                 self.listening = False
                 self.capture_started = False
-                if self.microphone:
-                    self.microphone.stop()
-                    self.microphone = None
-            elif kind in ("capture_error", "audio_error"):
+            elif kind == "capture_finished" and value is self.microphone:
+                self.microphone = None
+                self.listening = self.capture_started = False
+                self.capture_waiting = False
+                report = getattr(value, "report", None)
+                if report is not None:
+                    muted = (
+                        f"播报期间跳过拾音 {report.muted_frames / report.rate:.3f} 秒。"
+                        if report.muted_frames
+                        else ""
+                    )
+                    self.record_button.setToolTip(
+                        f"上次收音收到 {report.frames / report.rate:.2f} 秒音频。"
+                        f"采集缓冲峰值 {report.peak_buffer_frames / report.rate:.3f} 秒，"
+                        f"接收队列峰值 {report.peak_receiver_packets} 包。"
+                        f"从采集回调到处理的最长等待为 {report.max_delivery_lag_seconds:.3f} 秒。"
+                        + muted
+                    )
+            elif kind in ("speech_warning", "audio_error"):
+                if kind == "audio_error":
+                    token, value = value
+                    if token is not self.playback_token:
+                        continue
+                if self.song_session is not None:
+                    self.song_session.autoplay = False
+                self.status(value, True)
+            elif kind == "capture_error":
                 self.stop()
                 self.status(value, True)
             elif kind == "error":
@@ -1649,13 +1739,18 @@ class Window(ChromeWindow):
                     self.stop()
                 self.model.update_entry(key, status="处理失败")
                 self.status(value, True)
-        if self.after_load is not None and not self.pending:
-            resume, self.after_load = self.after_load, None
-            if self.ready and not self.closing:
-                resume()
-        backlog_message = "收音已停止，正在补完排队的字幕…"
-        if self.capture_backlogged and self.status_label.text() != backlog_message:
-            self.status(backlog_message)
+
+    def poll(self):
+        self._consume_events(160)
+        if (
+            self.capture_waiting
+            and self.listening
+            and self.status_label.text() != WAITING_FOR_AUDIO
+        ):
+            self.status(WAITING_FOR_AUDIO)
+        if self.capture_notice and self.status_label.toolTip() != self.capture_notice:
+            self.status("收音已停止，正在补完已接收的字幕…")
+            self.status_label.setToolTip(self.capture_notice)
         self._buttons()
         if self.closing and not self.worker.is_alive():
             self.timer.stop()
@@ -1813,6 +1908,6 @@ def main(*, muted=False):
     app.setApplicationDisplayName(APP_NAME)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
-    window = Window(muted=muted, preload=True)
+    window = Window(muted=muted)
     window.show()
     app.exec()

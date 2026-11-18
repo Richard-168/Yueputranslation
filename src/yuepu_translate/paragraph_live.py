@@ -4,7 +4,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from .inference_control import check_cancel
+from .inference_control import LiveSpeech, check_cancel
 from .languages import UNSUPPORTED_SCRIPT
 from .paragraphs import ParagraphRevision, accept_punctuation
 from .song_stream import SongMailbox
@@ -28,6 +28,7 @@ def run_live(session, engine, player, cancel, emit, inference_factory):
     work = SongMailbox()
     failures = []
     counts = dict(confirmed_count=0, partial_count=0)
+    speech = LiveSpeech(session, engine, player, cancel, emit)
 
     def version(window, reviewed):
         return window.end * 4 + (2 if window.final else 1) * int(reviewed)
@@ -47,11 +48,12 @@ def run_live(session, engine, player, cancel, emit, inference_factory):
                 reviewed=reviewed,
             ),
         )
+        speech.prepare()
 
     def review():
         inference = None
         try:
-            inference = inference_factory(session.source, session.cloud_config, emit)
+            inference = inference_factory(session.source, session.cloud_config, emit, engine=engine)
             inference.start(cancel)
             block, revision, cached = -1, None, None
             translated_block, state, preview_at = -1, None, 0
@@ -153,22 +155,17 @@ def run_live(session, engine, player, cancel, emit, inference_factory):
                     ),
                 )
                 counts["confirmed_count"] += 1
-                if session.autoplay:
-                    engine.speak(
-                        target,
-                        "zh" if session.source == "yue" else "yue",
-                        session.number_mode,
-                        player,
-                        cancel,
-                        lambda: None,
-                    )
+                speech.submit(target)
         except Exception as exc:
             failures.append(exc)
             cancel.set()
             session.mailbox.finish()
         finally:
-            if inference is not None:
-                inference.close()
+            try:
+                if inference is not None:
+                    inference.close()
+            finally:
+                speech.finish()
 
     worker = threading.Thread(target=review, name="pro-paragraph-review", daemon=True)
     try:

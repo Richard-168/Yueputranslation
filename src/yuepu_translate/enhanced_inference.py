@@ -4,31 +4,40 @@ import os
 
 from .cloud_client import CloudClient
 from .cloud_protocol import CloudError
-from .inference_control import check_cancel
+from .inference_control import check_cancel, speak_translation
 from .languages import UNSUPPORTED_SCRIPT
 from .paragraphs import accept_punctuation
 from .translation_state import IncrementalTranslation
 
 
 class SessionInference:
-    def __init__(self, source, config, emit, local_factory=None, roles=("asr", "translation")):
+    def __init__(
+        self, source, config, emit, local_factory=None, roles=("asr", "translation"), *, engine=None
+    ):
         if local_factory is None:
             from .local_inference import LocalInference
 
             local_factory = LocalInference
-        self.local = {
-            role: local_factory(role, source, threads=min(12, os.cpu_count() or 4))
-            for role in roles
-        }
+        self.source = source
+        self.shared_translation = engine.translator if engine is not None else None
+        self.local = {}
+        for role in roles:
+            if role == "translation" and self.shared_translation is not None:
+                self.local[role] = self.shared_translation
+            else:
+                self.local[role] = local_factory(role, source, threads=min(12, os.cpu_count() or 4))
         self.cloud = CloudClient(config, source) if config is not None else None
         self.online = self.cloud is not None
         self.emit = emit
 
     def start(self, cancel):
-        for inference in self.local.values():
-            inference.start(cancel)
-        # Fallback is ready before any upload; this warm-up never uses the cloud.
-        self.local["translation"].translate("你好。", cancel)
+        check_cancel(cancel)
+        if self.online:
+            for inference in self.local.values():
+                inference.check_files()
+        elif "asr" in self.local:
+            # Load the paragraph reviewer while the independent light ASR starts listening.
+            self.local["asr"].start(cancel)
         self.state("cloud_pending" if self.online else "offline")
 
     def state(self, mode, reason=""):
@@ -59,6 +68,8 @@ class SessionInference:
                 self.cloud.close()
                 self.state("fallback", str(exc))
         role = "asr" if method == "transcribe" else "translation"
+        if role == "translation" and self.shared_translation is not None:
+            return self.shared_translation.translate(value, cancel, source=self.source)
         return getattr(self.local[role], method)(value, cancel)
 
     def transcribe(self, samples, cancel):
@@ -79,9 +90,8 @@ class SessionInference:
         if self.cloud:
             self.cloud.close()
         for inference in self.local.values():
-            inference.stop()
-        for inference in self.local.values():
-            inference.close()
+            if inference is not self.shared_translation:
+                inference.close()
 
 
 def process_short_request(request, config, engine, player, cancel, emit):
@@ -91,9 +101,11 @@ def process_short_request(request, config, engine, player, cancel, emit):
     from .desktop_engine import Cancelled
     from .inference_control import InferenceCancelled
 
-    inference = SessionInference(request.source, config, emit, roles=("translation",))
+    inference = SessionInference(
+        request.source, config, emit, roles=("translation",), engine=engine
+    )
     try:
-        emit("status", "正在准备联网翻译与本地回退…")
+        emit("status", "正在准备联网翻译…")
         inference.start(cancel)
         text = request.text
         recognition_seconds = 0
@@ -126,7 +138,7 @@ def process_short_request(request, config, engine, player, cancel, emit):
         )
         if request.autoplay:
             target = "zh" if request.source == "yue" else "yue"
-            engine.speak(translated, target, request.number_mode, player, cancel, lambda: None)
+            speak_translation(engine, translated, target, request.number_mode, player, cancel, emit)
     except InferenceCancelled:
         raise Cancelled() from None
     finally:

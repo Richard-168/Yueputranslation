@@ -61,6 +61,9 @@ class Capture:
 
     def stop(self):
         self.stream.flush()
+        self.on_finished()
+
+    request_stop = stop
 
 
 def main():
@@ -102,7 +105,8 @@ def main():
         history = SessionHistory(OUT / "history.sqlite3")
         window = Window(muted=True, history=history)
         window.show()
-        window.ready = True
+        window.engine.prepare_recognition = lambda cancel: None
+        window.engine.prepare_voice = lambda target, cancel: None
         window.engine.recognize = lambda *args: "轻量草稿测试"
         window.engine.speak = lambda *args: None
         window._buttons()

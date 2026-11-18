@@ -6,30 +6,31 @@ Microphone and speakers are accessed only when their user-facing actions run.
 
 from __future__ import annotations
 
+import os
 import queue
 import re
-import subprocess
-import tempfile
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
-from pathlib import Path
+from functools import cached_property
 
 import numpy as np
-import opencc
-import sherpa_onnx
-import sounddevice as sd
-import soundfile as sf
-from canto_tts.backends.base import safe_prepare_text
 
 from . import model_runtime
 from .audio_profile import DEFAULT_SENSITIVITY, voice_profile
 from .capture_process import CaptureProcess
+from .inference_control import (
+    IncompleteSpeech,
+    InferenceCancelled,
+    PlaybackUnavailable,
+    speak_translation,
+)
 from .languages import ASR_LANGUAGES as ASR_LANGUAGES
 from .languages import UNSUPPORTED_SCRIPT
+from .local_inference import LocalInference
 from .numbers import spoken_numbers
 from .paths import DATA_DIR
-from .preferences import cache_directory
 
 ROOT = DATA_DIR
 # The native 4s setting is a soft VAD heuristic, not a hard cut. Keep its
@@ -37,7 +38,7 @@ ROOT = DATA_DIR
 MAX_LIVE_SEGMENT_SECONDS = 4.5
 
 
-class Cancelled(Exception):
+class Cancelled(InferenceCancelled):
     pass
 
 
@@ -54,6 +55,43 @@ class Request:
     number_mode: str = "original"
 
 
+class PlaybackOutput:
+    """All chunks and asynchronous device errors belong to the task that made them."""
+
+    def __init__(self, player, error):
+        self.player = player
+        self.error = error
+        self.generation = player.generation
+        self.failed = threading.Event()
+
+    def check(self, cancel):
+        if (
+            cancel.is_set()
+            or self.player.closed.is_set()
+            or self.generation != self.player.generation
+        ):
+            raise Cancelled()
+        if self.failed.is_set():
+            raise PlaybackUnavailable("译音设备不可用，已停止本次播报。")
+
+    def put(self, samples, rate, cancel):
+        self.check(cancel)
+        data = np.asarray(samples, dtype=np.float32)
+        if data.ndim == 1:
+            data = data[:, None]
+        chunk = data.copy()
+        if self.player.muted:
+            self.player.chunks.append((chunk, rate))
+            return
+        while True:
+            self.check(cancel)
+            try:
+                self.player.queue.put((self, chunk, rate), timeout=0.05)
+                return
+            except queue.Full:
+                continue
+
+
 class AudioPlayer:
     def __init__(self, error, muted=False):
         self.error, self.muted = error, muted
@@ -61,6 +99,10 @@ class AudioPlayer:
         self.closed = threading.Event()
         self.generation = 0
         self.chunks = []
+        # At 50 ms writes this covers well beyond the capture transport backlog.
+        self._play_times = deque(maxlen=2048)
+        self._play_times_lock = threading.Lock()
+        self.output = self.for_task(error)
         self.thread = None
         if not muted:
             self.thread = threading.Thread(target=self._run, daemon=True)
@@ -71,27 +113,26 @@ class AudioPlayer:
         # Includes the block currently being written, not just waiting blocks.
         return self.queue.unfinished_tasks > 0
 
+    def for_task(self, error):
+        return PlaybackOutput(self, error)
+
     def put(self, samples, rate, cancel):
-        if cancel.is_set():
-            raise Cancelled()
-        data = np.asarray(samples, dtype=np.float32)
-        if data.ndim == 1:
-            data = data[:, None]
-        if self.muted:
-            self.chunks.append((data.copy(), rate))
-            return
-        while not self.closed.is_set():
-            if cancel.is_set():
-                raise Cancelled()
-            try:
-                self.queue.put((self.generation, data.copy(), rate), timeout=0.05)
-                return
-            except queue.Full:
-                continue
-        raise Cancelled()
+        self.output.put(samples, rate, cancel)
+
+    def playback_intervals(self, start, end):
+        """Monotonic seconds, estimated from writes and the output device latency."""
+        if end <= start:
+            return ()
+        with self._play_times_lock:
+            return tuple(
+                (max(start, begin), min(end, finish))
+                for begin, finish in self._play_times
+                if finish > start and begin < end
+            )
 
     def stop(self):
         self.generation += 1
+        self.output = self.for_task(self.error)
         while True:
             try:
                 self.queue.get_nowait()
@@ -102,17 +143,20 @@ class AudioPlayer:
     def _run(self):
         stream = None
         current_format = None
+        audible_until = 0.0
         try:
             while not self.closed.is_set():
                 try:
-                    generation, data, rate = self.queue.get(timeout=0.1)
+                    output, data, rate = self.queue.get(timeout=0.1)
                 except queue.Empty:
                     continue
                 try:
-                    if generation != self.generation:
+                    if output.generation != self.generation or output.failed.is_set():
                         continue
                     fmt = (rate, data.shape[1])
                     if fmt != current_format:
+                        import sounddevice as sd
+
                         if stream is not None:
                             stream.close()
                         stream = sd.OutputStream(
@@ -120,19 +164,36 @@ class AudioPlayer:
                         )
                         stream.start()
                         current_format = fmt
+                        audible_until = 0.0
                     # Short writes bound Stop latency; no unbounded playback buffer.
                     size = max(1, int(rate * 0.05))
                     for start in range(0, len(data), size):
-                        if generation != self.generation or self.closed.is_set():
+                        if output.generation != self.generation or self.closed.is_set():
                             break
-                        stream.write(data[start : start + size])
+                        chunk = data[start : start + size]
+                        latency = max(0, float(getattr(stream, "latency", 0)))
+                        begins = max(audible_until, time.monotonic() + latency)
+                        audible_until = begins + len(chunk) / rate
+                        interval = (begins, audible_until)
+                        with self._play_times_lock:
+                            self._play_times.append(interval)
+                        try:
+                            stream.write(chunk)
+                        except Exception:
+                            with self._play_times_lock:
+                                self._play_times.pop()
+                            raise
                 except Exception:
-                    self.stop()
-                    self.error("无法播放译音，请检查 Windows 默认输出设备后重试。")
+                    output.failed.set()
                     if stream is not None:
-                        stream.close()
+                        try:
+                            stream.close()
+                        except Exception:
+                            pass
                         stream = None
-                        current_format = None
+                    current_format = None
+                    if output.generation == self.generation and not self.closed.is_set():
+                        output.error("无法播放译音，请检查 Windows 默认输出设备后重试。")
                 finally:
                     self.queue.task_done()
         finally:
@@ -146,52 +207,83 @@ class AudioPlayer:
             self.thread.join(timeout=2)
 
 
+def cantonese_phrases(text, limit=28):
+    """Keep short utterances intact; bound each long Cantonese synthesis request."""
+    while len(text) > limit:
+        prefix = text[:limit]
+        # Prefer sentence/phrase boundaries; keep decimal separators inside numbers.
+        cuts = [
+            m.end()
+            for m in re.finditer(
+                r"[。！？；，、：…]|[!?;]|(?<!\d)[.,:]|[.,:](?!\d)|\s+", text[: limit + 1]
+            )
+            if m.end() <= limit
+        ]
+        cut = cuts[-1] if cuts else limit
+        # Keep a whole Latin word where it fits within the next phrase.
+        if (
+            not cuts
+            and prefix[-1].isascii()
+            and prefix[-1].isalnum()
+            and text[limit].isascii()
+            and text[limit].isalnum()
+        ):
+            word = re.search(r"[A-Za-z0-9]+$", prefix)
+            if word and word.start():
+                cut = word.start()
+        phrase, text = text[:cut], text[cut:]
+        if any(c.isalnum() for c in phrase):
+            yield phrase
+    if any(c.isalnum() for c in text):
+        yield text
+
+
 class Engine:
     def __init__(self):
         self.asr = self.zh_tts = self.yue_tts = None
+        self.translator = LocalInference(
+            "translation", root=ROOT, threads=min(12, os.cpu_count() or 4)
+        )
         self.warmed = False
-        self.converters = {"zh": opencc.OpenCC("t2s"), "yue": opencc.OpenCC("s2t")}
+
+    @cached_property
+    def converters(self):
+        import opencc
+
+        return {"zh": opencc.OpenCC("t2s"), "yue": opencc.OpenCC("s2t")}
 
     @staticmethod
     def check(cancel):
         if cancel.is_set():
             raise Cancelled()
 
-    def load(self, cancel, status):
-        required = [
-            "models/asr-wenet/model.int8.onnx",
-            "models/asr-wenet/tokens.txt",
-            "models/hymt2/Hy-MT2-1.8B-Q4_K_M.gguf",
-            "models/canto/browser_poc_manifest.json",
-            "models/tts-zh/model.int8.onnx",
-            "models/tts-zh/tokens.txt",
-            "models/tts-zh/lexicon.txt",
-            "models/vad/silero_vad.onnx",
-            "runtime/llama-b12314/llama-completion.exe",
-            "runtime/llama-b12314/llama-server.exe",
-        ]
-        missing = [path for path in required if not (ROOT / path).is_file()]
-        if missing:
-            raise RuntimeError(
-                f"离线模型或运行程序不完整，缺少 {len(missing)} 个文件"
-                f"（例如 {missing[0]}）。\n"
-                f"模型查找目录：{ROOT}\n"
-                "从源码运行时，请按 README 的“开发环境与启动”准备模型。"
-            )
+    def prepare_recognition(self, cancel):
         self.check(cancel)
-        cache_directory()
-        status("正在加载语音识别…")
         if self.asr is None:
             self.asr = model_runtime.recognizer()
         self.check(cancel)
-        status("正在加载普通话译音…")
-        if self.zh_tts is None:
-            self.zh_tts = model_runtime.mandarin_engine()
+
+    def prepare_voice(self, target, cancel):
         self.check(cancel)
-        status("正在加载粤语译音，首次可能需要十几秒…")
-        if self.yue_tts is None:
+        if target == "zh" and self.zh_tts is None:
+            self.zh_tts = model_runtime.mandarin_engine()
+        elif target == "yue" and self.yue_tts is None:
             self.yue_tts = model_runtime.canto_engine()
         self.check(cancel)
+
+    def close(self):
+        self.translator.close()
+        self.asr = self.zh_tts = self.yue_tts = None
+        self.warmed = False
+
+    def load(self, cancel, status):
+        """Explicit full offline warm-up for diagnostics; user tasks load by role."""
+        status("正在加载语音识别…")
+        self.prepare_recognition(cancel)
+        status("正在加载普通话译音…")
+        self.prepare_voice("zh", cancel)
+        status("正在加载粤语译音…")
+        self.prepare_voice("yue", cancel)
         if not self.warmed:
             status("正在预热离线翻译和译音，完成后即可开始交流…")
             self.translate("你好。", "zh", cancel)
@@ -211,13 +303,12 @@ class Engine:
         self.check(cancel)
         if source not in {"zh", "yue"}:
             raise ValueError("请选择粤语或普通话作为交流方向。")
-        if self.asr is None:
-            raise RuntimeError("请先加载离线模型。")
         data = np.asarray(samples, dtype=np.float32)
         if data.ndim == 2:
             data = data.mean(axis=1)
         if not len(data) or len(data) / rate > 15 or not np.isfinite(data).all():
             raise ValueError("验证工具每次接受不超过 15 秒的有效语音，请分段重试。")
+        self.prepare_recognition(cancel)
 
         def decode(recognizer):
             stream = recognizer.create_stream()
@@ -248,95 +339,34 @@ class Engine:
         self.check(cancel)
         if not text.strip() or len(text) > 120:
             raise ValueError("请提供 1–120 字的短句；较长内容请分句验证。")
-        target = "中文" if source == "yue" else "粤语"
-        user = f"将以下文本翻译为{target}，注意只需要输出翻译后的结果，不要额外解释：\n\n{text}"
-        prompt = f"<｜hy_begin▁of▁sentence｜><｜hy_User｜>{user}<｜hy_Assistant｜>"
-        # Per-job text files are removed on success, cancellation and error.
-        with tempfile.TemporaryDirectory(prefix="yuepu-", dir=cache_directory()) as directory:
-            path = Path(directory) / "prompt.txt"
-            path.write_text(prompt, encoding="utf-8")
-            command = [
-                str(ROOT / "runtime/llama-b12314/llama-completion.exe"),
-                "-m",
-                str(ROOT / "models/hymt2/Hy-MT2-1.8B-Q4_K_M.gguf"),
-                "--offline",
-                "--no-conversation",
-                "--no-display-prompt",
-                "--simple-io",
-                "--color",
-                "off",
-                "--ctx-size",
-                "2048",
-                "--threads",
-                "4",
-                "--n-gpu-layers",
-                "0",
-                "--no-warmup",
-                "--seed",
-                "42",
-                "--temp",
-                "0.7",
-                "--top-k",
-                "20",
-                "--top-p",
-                "0.6",
-                "--repeat-penalty",
-                "1.05",
-                "-n",
-                "192",
-                "-f",
-                str(path),
-            ]
-            with (Path(directory) / "runtime.log").open("wb") as log:
-                child = subprocess.Popen(
-                    command,
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=log,
-                    creationflags=subprocess.CREATE_NO_WINDOW,
-                )
-                deadline = time.monotonic() + 30
-                try:
-                    while child.poll() is None:
-                        self.check(cancel)
-                        if time.monotonic() > deadline:
-                            raise TimeoutError("本句翻译超时，请缩短句子后重试。")
-                        cancel.wait(0.05)
-                    output = child.stdout.read().decode("utf-8", errors="replace")
-                    if child.returncode != 0:
-                        raise RuntimeError("本地翻译未能完成，请停止后重试。")
-                    if "[end of text]" not in output:
-                        raise RuntimeError("本句译文没有完整生成，请缩短句子后重试。")
-                    result = re.sub(r"\s*\[end of text\]\s*$", "", output).strip()
-                    if not result:
-                        raise RuntimeError("没有生成译文，请重试。")
-                    self.check(cancel)
-                    return result
-                finally:
-                    if child.poll() is None:
-                        child.terminate()
-                        try:
-                            child.wait(timeout=2)
-                        except subprocess.TimeoutExpired:
-                            child.kill()
-                            child.wait(timeout=2)
-                    child.stdout.close()
+        try:
+            return self.translator.translate(text, cancel, source=source)
+        except InferenceCancelled:
+            raise Cancelled() from None
 
     def speak(self, text, target, number_mode, player, cancel, first_audio):
-        self.check(cancel)
+        if isinstance(player, AudioPlayer):
+            player = player.output
+        player.check(cancel)
+        self.prepare_voice(target, cancel)
+        player.check(cancel)
         spoken = self.converters[target].convert(text)
         if target == "zh" and number_mode != "original":
             spoken, _ = spoken_numbers(spoken, number_mode)
         if target == "zh":
+            import sherpa_onnx
+
             config = sherpa_onnx.GenerationConfig()
             config.sid, config.speed = 0, 1.0
             audio = self.zh_tts.generate(spoken, config)
-            self.check(cancel)
+            player.check(cancel)
             if not len(audio.samples) or audio.sample_rate <= 0:
                 raise RuntimeError("普通话译音生成失败。")
             first_audio()
             player.put(audio.samples, audio.sample_rate, cancel)
             return
+        from canto_tts.backends.base import safe_prepare_text
+
         backend = self.yue_tts._backend
         runtime = backend._runtime
         runtime.manifest["generation_defaults"].update(
@@ -349,18 +379,12 @@ class Engine:
             audio_top_k=25,
             audio_repetition_penalty=1.0,
         )
-        runtime.rng = np.random.default_rng(1234)
-        runtime.codec_streaming_session.reset()
-        request = runtime.build_voice_clone_request_rows(
-            backend._default_voice_codes,
-            backend._encoder.encode(safe_prepare_text(backend.to_phoneme(spoken))),
-        )
         rate = int(runtime.codec_meta["codec_config"]["sample_rate"])
         pending, emitted = [], False
 
         def emit():
             nonlocal emitted
-            self.check(cancel)
+            player.check(cancel)
             if not pending:
                 return
             decoded = runtime.codec_streaming_session.run_frames(pending.copy())
@@ -375,13 +399,25 @@ class Engine:
                 player.put(tensor[0, :, :length].T, rate, cancel)
 
         def callback(frames, step, frame):
-            self.check(cancel)
+            player.check(cancel)
             pending.append(frame)
             if len(pending) >= 4:
                 emit()
 
-        runtime.generate_audio_frames(request, on_frame=callback)
-        emit()
+        for phrase in cantonese_phrases(spoken):
+            player.check(cancel)
+            runtime.rng = np.random.default_rng(1234)
+            runtime.codec_streaming_session.reset()
+            request = runtime.build_voice_clone_request_rows(
+                backend._default_voice_codes,
+                backend._encoder.encode(safe_prepare_text(backend.to_phoneme(phrase))),
+            )
+            frames = runtime.generate_audio_frames(request, on_frame=callback)
+            emit()
+            if len(frames) >= runtime.manifest["generation_defaults"]["max_new_frames"]:
+                raise IncompleteSpeech("粤语译音达到单段时长上限，播报可能不完整。")
+            if not frames:
+                raise IncompleteSpeech("粤语合成没有读出当前分句，播报未完成。")
         if not emitted:
             raise RuntimeError("粤语译音生成失败。")
 
@@ -389,16 +425,21 @@ class Engine:
         start = time.perf_counter()
         recognition_seconds = 0.0
         if request.kind == "speak":
-            self.speak(
-                request.text,
-                request.source,
-                request.number_mode,
-                player,
-                cancel,
-                lambda: event("first_audio", time.perf_counter() - start),
-            )
+            try:
+                self.speak(
+                    request.text,
+                    request.source,
+                    request.number_mode,
+                    player,
+                    cancel,
+                    lambda: event("first_audio", time.perf_counter() - start),
+                )
+            except PlaybackUnavailable:
+                pass  # The output worker already notified this request.
             return
         if request.kind == "file":
+            import soundfile as sf
+
             info = sf.info(request.path)
             if info.duration > 15:
                 raise ValueError("验证工具每次接受不超过 15 秒的音频，请分段重试。")
@@ -430,12 +471,14 @@ class Engine:
         )
         if request.autoplay:
             event("status", "正在生成译音…")
-            self.speak(
+            speak_translation(
+                self,
                 translated,
                 target,
                 request.number_mode,
                 player,
                 cancel,
+                event,
                 lambda: event("first_audio", time.perf_counter() - start),
             )
 
@@ -543,6 +586,9 @@ class PlaybackProcessor:
 
 
 def make_vad(*, live=False, sensitivity=DEFAULT_SENSITIVITY):
+    import sherpa_onnx
+
+    model_runtime.require_models("vad/silero_vad.onnx")
     profile = voice_profile(sensitivity)
     config = sherpa_onnx.VadModelConfig()
     config.silero_vad.model = str(ROOT / "models/vad/silero_vad.onnx")

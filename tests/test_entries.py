@@ -17,7 +17,15 @@ class EntryTests(unittest.TestCase):
 
         native = types.ModuleType("sherpa_onnx")
         native.OfflineRecognizer = types.SimpleNamespace(from_wenet_ctc=Mock())
-        with patch.dict(sys.modules, {"sherpa_onnx": native}):
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(model_runtime, "MODELS", Path(folder)),
+            patch.dict(sys.modules, {"sherpa_onnx": native}),
+        ):
+            base = Path(folder) / "asr-wenet"
+            base.mkdir()
+            (base / "model.int8.onnx").touch()
+            (base / "tokens.txt").touch()
             for language in ("", "zh", "yue", "en"):
                 model_runtime.recognizer(language)
                 kwargs = native.OfflineRecognizer.from_wenet_ctc.call_args.kwargs

@@ -4,7 +4,7 @@ import json
 import os
 import sqlite3
 from contextlib import closing, contextmanager
-from dataclasses import asdict, dataclass, fields
+from dataclasses import dataclass, fields
 from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
@@ -12,6 +12,7 @@ from pathlib import Path
 from .transcript_model import TranscriptEntry
 
 _ENTRY_TYPES = {field.name: field.type for field in fields(TranscriptEntry)}
+_SAVED_FIELDS = tuple(name for name in _ENTRY_TYPES if name != "target_current")
 
 
 class SessionHistoryError(RuntimeError):
@@ -108,6 +109,7 @@ class SessionHistory:
                     and 0 <= entry.target_confirmed <= len(entry.target)
                 ):
                     raise ValueError("invalid transcript sequence or span")
+                entry.target_current = False
                 keys.add(entry.key)
             self._versions[session_id] = self._version(row)
             return entries
@@ -123,7 +125,9 @@ class SessionHistory:
         if len(title) > 48:
             title = title[:47] + "…"
         serialized = json.dumps(
-            [asdict(entry) for entry in captions], ensure_ascii=False, separators=(",", ":")
+            [{name: getattr(entry, name) for name in _SAVED_FIELDS} for entry in captions],
+            ensure_ascii=False,
+            separators=(",", ":"),
         )
         with self._database() as database:
             row = self._record_for_write(database, session_id)

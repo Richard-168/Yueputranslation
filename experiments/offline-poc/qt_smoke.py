@@ -148,7 +148,7 @@ def main():
     try:
         pump()
         window.grab().save(str(OUT / "initial.png"))
-        assert window.microphone is None and not window.ready
+        assert window.microphone is None and window.engine.translator.child is None
         for source, text in [
             ("yue", "佢今日唔得閒，聽日下晝三點先嚟。"),
             ("zh", "请在明天下午三点来，不要上午来。"),
@@ -160,7 +160,7 @@ def main():
             window.input.setPlainText(text)
             window.translate_button.click()
             until(lambda: window.pending == 0)
-            assert window.ready
+            assert window.engine.translator.child is not None
             assert len(window.model.items) == before + 1
             item = window.model.items[-1]
             assert item.source == text and item.target and item.status == "已翻译"

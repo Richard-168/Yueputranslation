@@ -68,6 +68,50 @@ def window(block=0, value=1, final=False):
 
 
 class LiveSessionTests(unittest.TestCase):
+    def test_voice_preparation_overlaps_live_translation_and_starts_only_for_autoplay(self):
+        for autoplay in (True, False):
+            with self.subTest(autoplay=autoplay):
+                session = LiveSession("zh", autoplay=autoplay)
+                preparing, allow_voice, translated = (threading.Event() for _ in range(3))
+                SlowTranslation.entered, SlowTranslation.release = (
+                    threading.Event(),
+                    threading.Event(),
+                )
+                SlowTranslation.release.set()
+                engine = Engine()
+                spoken = []
+
+                def prepare(target, cancel):
+                    self.assertEqual(target, "yue")
+                    preparing.set()
+                    allow_voice.wait(3)
+
+                def emit(kind, value):
+                    if kind == "live_translation" and value["final"]:
+                        translated.set()
+
+                engine.prepare_voice = prepare
+                engine.speak = lambda text, *args: spoken.append(text)
+                cancel = threading.Event()
+                worker = threading.Thread(target=session.run, args=(engine, None, cancel, emit))
+                with patch("yuepu_translate.live_session.SessionInference", SlowTranslation):
+                    worker.start()
+                    try:
+                        session.mailbox.put(window())
+                        if autoplay:
+                            self.assertTrue(preparing.wait(2))
+                        session.mailbox.put(window(final=True))
+                        session.mailbox.finish()
+                        self.assertTrue(translated.wait(2))
+                        self.assertEqual(spoken, [])
+                        self.assertEqual(preparing.is_set(), autoplay)
+                    finally:
+                        allow_voice.set()
+                        session.mailbox.finish()
+                        worker.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(spoken, ["译文测试1。"] if autoplay else [])
+
     def test_first_draft_appears_before_a_pause_and_keeps_updating(self):
         windows = []
         stream = make_live_stream(windows.append, detector=lambda frame: True)

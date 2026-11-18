@@ -1,5 +1,6 @@
 """Verify the desktop session list and subtitle restoration across restarts."""
 
+import json
 import sqlite3
 import tempfile
 import unittest
@@ -22,6 +23,24 @@ class SessionHistoryTests(unittest.TestCase):
         directory = self.enterContext(tempfile.TemporaryDirectory())
         self.path = Path(directory) / "history" / "test.sqlite3"
         self.history = SessionHistory(self.path)
+
+    def test_saved_json_remains_readable_by_clients_without_live_translation_versions(self):
+        caption = TranscriptEntry(
+            1,
+            "yue",
+            "zh",
+            source="落雨",
+            target="下雨",
+            status="粗略译文 · 待复核",
+            target_current=True,
+        )
+        self.history.save("draft", [caption])
+        with closing(sqlite3.connect(self.path)) as db:
+            raw = db.execute("SELECT entries FROM sessions WHERE id='draft'").fetchone()[0]
+        self.assertNotIn("target_current", json.loads(raw)[0])
+        reopened = self.history.load("draft")[0]
+        self.assertEqual(reopened.target, "下雨")
+        self.assertFalse(reopened.target_current)
 
     def test_round_trip_keeps_bilingual_caption_metadata(self):
         caption = TranscriptEntry(

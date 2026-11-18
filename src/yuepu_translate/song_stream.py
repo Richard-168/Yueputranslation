@@ -1,7 +1,7 @@
 """Paragraph snapshots: real pause endings, bounded context, latest-only drafts."""
 
 from collections import deque
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from threading import Condition
 from time import monotonic
 
@@ -85,6 +85,7 @@ class RollingAudio:
         self.voice_end = 0
         self.next_update = 0
         self.last_final_end = 0
+        self.defer_drafts = False
 
     def _window(self, final=False, checkpoint=False):
         end = min(self.end, self.origin + self.context_samples) if checkpoint else self.end
@@ -145,7 +146,7 @@ class RollingAudio:
             self._window(final=True)
         elif self.end - self.origin >= self.context_samples:
             self._window(checkpoint=True)
-        elif self.end >= self.next_update:
+        elif self.end >= self.next_update and not self.defer_drafts:
             self._window()
 
     def feed(self, samples):
@@ -174,6 +175,7 @@ class SongMailbox:
         self.finals = deque()
         self.draft = None
         self.finished = False
+        self.cutoff_reached = False
         self.max_finals = max_finals
         self.stop_at_limit = stop_at_limit
         self.coalesced = 0
@@ -189,6 +191,7 @@ class SongMailbox:
         with self.condition:
             if (
                 self.finished
+                or self.cutoff_reached
                 or window.block <= self.last_final
                 or (cancel is not None and cancel.is_set())
             ):
@@ -200,15 +203,20 @@ class SongMailbox:
                     self.condition.wait(0.05)
                     if self.finished or cancel.is_set() or window.block <= self.last_final:
                         return
+                at_cutoff = self.stop_at_limit and len(self.finals) + 1 == self.max_finals
+                if at_cutoff and window.checkpoint and not window.final:
+                    # No subsequent window can be admitted to close this paragraph.
+                    window = replace(window, final=True, checkpoint=False)
                 self.finals.append(window)
                 if window.final:
                     self.last_final = window.block
                 if self.draft is not None and self.draft.block <= window.block:
                     self.coalesced += 1
                     self.draft = None
-                if self.stop_at_limit and len(self.finals) == self.max_finals:
-                    # Keep the window that filled the buffer. The producer
-                    # closes capture and the consumer can still drain it.
+                if at_cutoff:
+                    # Reject more input now; only the capture owner's finish()
+                    # after its final status/flush lets the consumer exit.
+                    self.cutoff_reached = True
                     self.condition.notify_all()
                     raise SongOverload("字幕处理跟不上播放速度，待确认队列已满。")
             else:

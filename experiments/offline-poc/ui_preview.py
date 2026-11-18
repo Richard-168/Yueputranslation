@@ -152,7 +152,7 @@ def verify(app, history):
     try:
         assert not window.windowIcon().isNull() and window.empty_brand.isVisible()
         assert window.windowTitle() == window.findChild(QLabel, "brand").text() == "粤普同传"
-        assert not window.ready and window.record_button.isEnabled()
+        assert window.engine.translator.child is None and window.record_button.isEnabled()
         assert not window.history_list.count()
         for theme in THEMES:
             window.apply_theme(theme)
