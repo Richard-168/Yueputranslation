@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from yuepu_translate import APP_NAME
 from yuepu_translate.paths import data_dir
 
 
@@ -57,7 +58,7 @@ class EntryTests(unittest.TestCase):
                     timeout=15,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("粤普双向翻译", result.stdout)
+                self.assertIn(APP_NAME, result.stdout)
                 self.assertIn("生成译音但不播放", result.stdout)
 
     def test_chinese_argument_error_is_utf8_on_a_legacy_code_page(self):

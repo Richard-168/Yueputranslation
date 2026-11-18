@@ -170,8 +170,14 @@ class Engine:
             "runtime/llama-b12314/llama-completion.exe",
             "runtime/llama-b12314/llama-server.exe",
         ]
-        if any(not (ROOT / p).is_file() for p in required):
-            raise RuntimeError("离线模型文件不完整，请先完成模型准备。")
+        missing = [path for path in required if not (ROOT / path).is_file()]
+        if missing:
+            raise RuntimeError(
+                f"离线模型或运行程序不完整，缺少 {len(missing)} 个文件"
+                f"（例如 {missing[0]}）。\n"
+                f"模型查找目录：{ROOT}\n"
+                "从源码运行时，请按 README 的“开发环境与启动”准备模型。"
+            )
         self.check(cancel)
         cache_directory()
         status("正在加载语音识别…")

@@ -23,20 +23,31 @@ Android 版提供离线文字和麦克风翻译、本机会话历史及深浅主
 
 ## 开发环境与启动
 
-当前支持 Windows x64、Python **3.12**。首次安装依赖及准备模型需要联网；准备完成后推理使用本地文件。下载需数 GB 空间，请另留依赖和模型解压空间。
+当前支持 Windows x64、Python **3.12**。新克隆的仓库需要先安装依赖，再单独下载离线模型和运行程序。首次准备需要联网，模型和运行程序约下载 4.33 GiB，请另留依赖和解压空间。准备完成后可离线推理。
 
-在仓库根目录的 PowerShell 中执行：
+在仓库根目录打开 PowerShell，创建环境并安装依赖。
 
 ```powershell
 py -3.12 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -e ".[offline,dev]"
-.\.venv\Scripts\python.exe experiments\offline-poc\prepare_models.py asr canto hymt2 runtime mandarin vad song-asr-large
+```
+
+基础模型和默认 pro 模式的复核模型要分两次下载。每次下载上限为 4 GiB，两次都显示 `Prepared and verified requested assets.` 后再启动。
+
+```powershell
+.\.venv\Scripts\python.exe experiments\offline-poc\prepare_models.py asr canto hymt2 runtime mandarin vad
+.\.venv\Scripts\python.exe experiments\offline-poc\prepare_models.py song-asr-large
+```
+
+准备完成后，双击根目录的 `Start-YuePu.cmd`，也可以在 PowerShell 中启动。
+
+```powershell
 .\.venv\Scripts\python.exe -m yuepu_translate
 ```
 
-也可双击根目录 `Start-YuePu.cmd`。已有 `experiments/offline-poc/.venv` 的本地环境可继续使用旧启动器，不必重新下载模型。源码安装是目前的使用方式，以上命令不会创建 Windows 安装包。
+已有 `experiments/offline-poc/.venv` 的本地环境可继续使用 `Start-YuePu.cmd`，并复用已准备的模型。
 
-数据目录由 `YUEPU_DATA_DIR` 指定，必须为绝对路径。在源码目录运行时默认使用 `experiments/offline-poc/`，以复用已有模型；独立安装时默认使用 `%LOCALAPPDATA%/YuePuTranslate/`。模型准备和应用必须使用同一个目录，设置环境变量后需重启应用。
+数据目录可用 `YUEPU_DATA_DIR` 指定，必须为绝对路径。源码运行默认使用 `experiments/offline-poc/`，独立安装的 Python 包默认使用 `%LOCALAPPDATA%/YuePuTranslate/`。如果在 PowerShell 中临时设置了这个变量，请在同一个窗口下载模型并启动应用，让两者使用同一目录。
 
 ```powershell
 $env:YUEPU_DATA_DIR = "D:\YuePuData"
