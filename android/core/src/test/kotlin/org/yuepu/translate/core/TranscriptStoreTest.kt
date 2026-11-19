@@ -49,4 +49,41 @@ class TranscriptStoreTest {
         assertTrue(store.translation(epoch, 4, 1, "译文"))
         assertTrue(store.snapshot().sumOf { it.source.length + it.target.length } <= 12)
     }
+
+    @Test fun restoredHistoryRejectsQueuedEventsAndNewWorkUsesUnusedEpochs() {
+        val store = TranscriptStore()
+        val previous = store.begin()
+        store.source(previous, 0, 1, "本次草稿", false)
+        val restored = Caption(
+            block = 0, source = "早晨。", target = "早上好。", final = true,
+            epoch = 8, version = 3, createdAt = 100, targetVersion = 3,
+        )
+        store.restore(listOf(restored))
+        assertFalse(store.source(previous, 1, 1, "迟到的草稿", false))
+        assertFalse(store.translation(restored.epoch, 0, 3, "不应写入"))
+        assertEquals(listOf(restored), store.snapshot())
+        assertTrue(store.snapshot().single().targetFinal)
+
+        val next = store.begin("zh")
+        assertTrue(next > restored.epoch)
+        assertTrue(store.source(next, 0, 1, "继续翻译", true))
+        assertEquals(listOf("yue", "zh"), store.snapshot().map { it.sourceLanguage })
+        store.restore(emptyList())
+        assertFalse(store.source(next, 0, 2, "迟到的确认", true))
+        assertTrue(store.begin() > next)
+    }
+
+    @Test fun restoringHistoryHonorsRowAndCharacterLimits() {
+        val store = TranscriptStore(maxRows = 2, maxCharacters = 5)
+        val saved = listOf(
+            Caption(0, "甲", "甲译", true),
+            Caption(1, "乙", "乙译", true),
+            Caption(2, "丙", "丙", true),
+            Caption(3, "丁", "丁", true),
+        )
+        store.restore(saved)
+        assertEquals(saved.takeLast(2), store.snapshot())
+        store.restore(saved.take(2))
+        assertEquals(saved.take(2).takeLast(1), store.snapshot())
+    }
 }

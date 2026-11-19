@@ -1,12 +1,7 @@
-"""Load real models through the Qt Load button using the default temporary cache.
-
-No capture, playback, cloud calls, or custom cache-directory override.
-Preferences are isolated; actual recognizers, both TTS engines, and MT warm up.
-"""
+"""Exercise on-demand Windows startup and reuse one real MT process in both directions."""
 
 import json
 import os
-import tempfile
 import time
 from pathlib import Path
 from unittest.mock import patch
@@ -20,9 +15,9 @@ from PySide6.QtWidgets import QApplication  # noqa: E402
 
 from yuepu_translate.cloud_config import CloudConfig  # noqa: E402
 from yuepu_translate.desktop_qt import Window  # noqa: E402
-from yuepu_translate.preferences import cache_directory, load_preferences  # noqa: E402
+from yuepu_translate.session_history import SessionHistory  # noqa: E402
 
-OUT = Path(__file__).resolve().parents[2] / "outputs/load-smoke"
+OUT = Path(__file__).resolve().parents[2] / "outputs/demand-load-smoke"
 
 
 def main():
@@ -31,18 +26,8 @@ def main():
     app = QApplication([])
     QFontDatabase.addApplicationFont("C:/Windows/Fonts/msyh.ttc")
     errors, statuses = [], []
-    created_temporary_directories = []
-    original_temporary_directory = tempfile.TemporaryDirectory
-
-    def track_temporary_directory(*args, **kwargs):
-        directory = original_temporary_directory(*args, **kwargs)
-        if str(kwargs.get("prefix", "")).startswith("yuepu-"):
-            created_temporary_directories.append(Path(directory.name))
-        return directory
-
     with patch("yuepu_translate.desktop_qt.load_settings", return_value=(CloudConfig(), False)):
-        window = Window(muted=True)
-    window.show()
+        window = Window(muted=True, history=SessionHistory(OUT / "history.sqlite3"))
     original_status = window.status
 
     def status(text, error=False):
@@ -51,37 +36,38 @@ def main():
         original_status(text, error)
 
     window.status = status
-    assert not load_preferences().cache_directory, "Do not override the cache in this test"
-    started = time.monotonic()
-    tracking = patch(
-        "yuepu_translate.desktop_engine.tempfile.TemporaryDirectory",
-        side_effect=track_temporary_directory,
-    )
-    tracking.start()
+    child = None
     try:
-        window.load_button.click()
-        deadline = started + 120
-        while window.pending and time.monotonic() < deadline:
-            app.processEvents()
-            time.sleep(0.01)
-        assert not window.pending, "Loading timed out"
-        assert window.ready and window.engine.warmed, errors
-        assert not errors, errors
+        window.show()
+        app.processEvents()
+        assert window.pending == 0 and not window.input.isReadOnly()
+        assert window.engine.translator.child is None
+        window.auto_box.setChecked(False)
+        seconds = []
+        for direction, text in ((0, "多謝你幫手。"), (1, "谢谢你帮忙。")):
+            window.direction_box.setCurrentIndex(direction)
+            window.input.setPlainText(text)
+            begin = time.monotonic()
+            window.translate_button.click()
+            assert window.pending == 1
+            while window.pending and time.monotonic() - begin < 90:
+                app.processEvents()
+                time.sleep(0.01)
+            seconds.append(round(time.monotonic() - begin, 3))
+            assert not errors and not window.pending, (errors, statuses)
+            assert window.model.items[-1].target
+            if child is None:
+                child = window.engine.translator.child
+            assert child is not None and child.poll() is None
+            assert window.engine.translator.child is child
+            assert window.engine.asr is window.engine.zh_tts is window.engine.yue_tts is None
         assert window.record_button.isVisible() and window.record_button.isEnabled()
-        assert not window.load_button.isVisible()
-        cache_directory()
-        assert created_temporary_directories
-        assert not any(path.exists() for path in created_temporary_directories), (
-            "This process's warmup temporary files must be cleaned"
-        )
         window.grab().save(str(OUT / "ready.png"))
         report = dict(
             result="passed",
-            entry="actual Qt Load button",
-            cache="OS temporary directory, no override",
-            seconds=round(time.monotonic() - started, 3),
-            ready=window.ready,
-            engine_warmed=window.engine.warmed,
+            entry="idle window, first local translation and reverse translation",
+            translation_seconds=seconds,
+            reused_mt_process=True,
             errors=errors,
             statuses=statuses,
             audio="muted sink, no input/output device",
@@ -92,13 +78,13 @@ def main():
         )
         print(json.dumps(report, ensure_ascii=False), flush=True)
     finally:
-        tracking.stop()
         window.close()
         deadline = time.monotonic() + 40
         while window.worker.is_alive() and time.monotonic() < deadline:
             app.processEvents()
             time.sleep(0.02)
         assert not window.worker.is_alive(), "Worker did not stop"
+        assert child is None or child.poll() is not None, "Translation process did not stop"
 
 
 if __name__ == "__main__":

@@ -19,3 +19,7 @@ def data_dir():
 
 
 DATA_DIR = data_dir()
+ASR_DIR = "models/song-asr-large"
+ASR_MODEL = f"{ASR_DIR}/Qwen3-ASR-1.7B-Q8_0.gguf"
+ASR_PROJECTOR = f"{ASR_DIR}/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf"
+MT_MODEL = "models/hymt2/Hy-MT2-1.8B-Q4_K_M.gguf"

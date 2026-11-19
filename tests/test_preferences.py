@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 from PySide6.QtCore import QSettings
 
+from yuepu_translate.paths import ASR_MODEL, ASR_PROJECTOR, MT_MODEL
 from yuepu_translate.preferences import (
     Preferences,
     cache_directory,
@@ -18,6 +19,32 @@ from yuepu_translate.preferences import (
 
 
 class PreferencesTests(unittest.TestCase):
+    def test_defaults_follow_installed_models_and_yield_to_saved_choices(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            settings = QSettings(str(root / "preferences.ini"), QSettings.IniFormat)
+
+            def install(relative):
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.touch()
+
+            with patch("yuepu_translate.preferences.DATA_DIR", root):
+                install(MT_MODEL)
+                text = load_preferences(settings)
+                self.assertEqual(text.mode, "flash")
+                self.assertFalse(text.autoplay)
+                install("models/tts-zh/model.int8.onnx")
+                self.assertTrue(load_preferences(settings).autoplay)
+                install(ASR_MODEL)
+                install(ASR_PROJECTOR)
+                self.assertEqual(load_preferences(settings).mode, "pro")
+                settings.setValue("defaults/mode", "flash")
+                settings.setValue("defaults/autoplay", False)
+                saved = load_preferences(settings)
+                self.assertEqual(saved.mode, "flash")
+                self.assertFalse(saved.autoplay)
+
     def test_missing_sensitivity_defaults_to_standard_without_resetting_saved_options(self):
         with tempfile.TemporaryDirectory() as folder:
             settings = QSettings(str(Path(folder) / "preferences.ini"), QSettings.IniFormat)
@@ -27,6 +54,7 @@ class PreferencesTests(unittest.TestCase):
             self.assertEqual(getattr(restored, "sensitivity", None), "standard")
             self.assertEqual(restored.mode, "flash")
             self.assertEqual(restored.direction, "zh")
+            self.assertFalse(restored.mute_mic_during_playback)
 
     def test_invalid_saved_sensitivity_is_rejected(self):
         with tempfile.TemporaryDirectory() as folder:
@@ -71,6 +99,7 @@ class PreferencesTests(unittest.TestCase):
                 audio_source="system",
                 sensitivity="sensitive",
                 autoplay=False,
+                mute_mic_during_playback=True,
                 font_size=20,
                 smooth=False,
                 number_mode="amount",

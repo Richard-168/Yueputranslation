@@ -68,6 +68,50 @@ def window(block=0, value=1, final=False):
 
 
 class LiveSessionTests(unittest.TestCase):
+    def test_voice_preparation_overlaps_live_translation_and_starts_only_for_autoplay(self):
+        for autoplay in (True, False):
+            with self.subTest(autoplay=autoplay):
+                session = LiveSession("zh", autoplay=autoplay)
+                preparing, allow_voice, translated = (threading.Event() for _ in range(3))
+                SlowTranslation.entered, SlowTranslation.release = (
+                    threading.Event(),
+                    threading.Event(),
+                )
+                SlowTranslation.release.set()
+                engine = Engine()
+                spoken = []
+
+                def prepare(target, cancel):
+                    self.assertEqual(target, "yue")
+                    preparing.set()
+                    allow_voice.wait(3)
+
+                def emit(kind, value):
+                    if kind == "live_translation" and value["final"]:
+                        translated.set()
+
+                engine.prepare_voice = prepare
+                engine.speak = lambda text, *args: spoken.append(text)
+                cancel = threading.Event()
+                worker = threading.Thread(target=session.run, args=(engine, None, cancel, emit))
+                with patch("yuepu_translate.live_session.SessionInference", SlowTranslation):
+                    worker.start()
+                    try:
+                        session.mailbox.put(window())
+                        if autoplay:
+                            self.assertTrue(preparing.wait(2))
+                        session.mailbox.put(window(final=True))
+                        session.mailbox.finish()
+                        self.assertTrue(translated.wait(2))
+                        self.assertEqual(spoken, [])
+                        self.assertEqual(preparing.is_set(), autoplay)
+                    finally:
+                        allow_voice.set()
+                        session.mailbox.finish()
+                        worker.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(spoken, ["译文测试1。"] if autoplay else [])
+
     def test_first_draft_appears_before_a_pause_and_keeps_updating(self):
         windows = []
         stream = make_live_stream(windows.append, detector=lambda frame: True)
@@ -97,6 +141,53 @@ class LiveSessionTests(unittest.TestCase):
         stream.feed(np.zeros(16000 * 10, dtype=np.float32))
         stream.flush()
         self.assertEqual(windows, [])
+
+    def test_stop_drains_confirmations_after_a_burst_during_slow_translation(self):
+        entered, release, backlog_reached = threading.Event(), threading.Event(), threading.Event()
+        SlowTranslation.entered, SlowTranslation.release = entered, release
+        session, cancel = LiveSession("yue"), threading.Event()
+        events, errors = [], []
+
+        def emit(kind, value):
+            events.append((kind, value))
+            if kind == "live_source" and value["final"] and value["block"] == 4:
+                backlog_reached.set()
+
+        def run():
+            try:
+                session.run(Engine(), None, cancel, emit)
+            except Exception as exc:
+                errors.append(exc)
+
+        with patch("yuepu_translate.live_session.SessionInference", SlowTranslation):
+            worker = threading.Thread(target=run)
+            worker.start()
+            try:
+                session.mailbox.put(window(final=True))
+                self.assertTrue(entered.wait(2))
+                for block in range(1, 8):
+                    session.mailbox.put(window(block, value=block + 1, final=True))
+                self.assertTrue(backlog_reached.wait(2))
+                session.mailbox.finish()
+                release.set()
+                worker.join(3)
+                self.assertFalse(worker.is_alive())
+                self.assertFalse(cancel.is_set())
+            finally:
+                release.set()
+                cancel.set()
+                session.mailbox.finish()
+                worker.join(3)
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            [
+                value["block"]
+                for kind, value in events
+                if kind == "live_translation" and value["final"]
+            ],
+            list(range(8)),
+        )
+        self.assertEqual(events[-1], ("song_drained", dict(confirmed_count=8, partial_count=0)))
 
     def test_source_keeps_up_while_translation_is_blocked(self):
         entered, release, updated = threading.Event(), threading.Event(), threading.Event()

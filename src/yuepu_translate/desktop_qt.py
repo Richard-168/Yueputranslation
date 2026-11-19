@@ -3,26 +3,38 @@
 from __future__ import annotations
 
 import queue
+import random
 import threading
 import time
 from collections import OrderedDict, deque
 from dataclasses import replace
+from datetime import datetime
 from functools import partial
+from html import escape
 from pathlib import Path
+from uuid import uuid4
 
 from PySide6.QtCore import (
     QAbstractAnimation,
     QEasingCurve,
+    QEvent,
     QPropertyAnimation,
+    QRectF,
     QSize,
     Qt,
     QTimer,
     Signal,
 )
 from PySide6.QtGui import (
+    QActionGroup,
     QColor,
     QFont,
+    QFontMetrics,
+    QIcon,
     QKeySequence,
+    QPainter,
+    QPen,
+    QPixmap,
     QShortcut,
     QTextCharFormat,
     QTextCursor,
@@ -36,25 +48,35 @@ from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
     QFileDialog,
+    QFormLayout,
     QFrame,
+    QGridLayout,
     QHBoxLayout,
     QLabel,
     QListView,
-    QMainWindow,
+    QListWidget,
+    QListWidgetItem,
+    QMenu,
     QMessageBox,
-    QPlainTextEdit,
     QPushButton,
-    QScrollArea,
+    QSizePolicy,
+    QStyle,
     QStyledItemDelegate,
+    QStyleOptionViewItem,
+    QToolButton,
     QVBoxLayout,
     QWidget,
+    QWidgetAction,
 )
 
+from . import APP_NAME
 from .audio_profile import VOICE_PROFILES, voice_profile
 from .cloud_config import CloudConfig, load_settings
 from .cloud_dialog import CloudDialog
+from .composer_input import ComposerInput
 from .desktop_engine import AudioPlayer, Cancelled, Engine, Microphone, Request, SystemAudio
-from .desktop_theme import STYLE, THEMES, TerminalEmpty, palette, stylesheet
+from .desktop_sidebar import HistorySplitter
+from .desktop_theme import STYLE, THEMES, palette, stylesheet
 from .inference_control import InferenceCancelled
 from .live_session import LiveSession, make_live_stream
 from .paths import DATA_DIR
@@ -65,12 +87,28 @@ from .preferences import (
     save_preferences,
     settings_store,
 )
+from .session_history import SessionHistory, SessionHistoryConflict, SessionHistoryError
 from .settings_dialog import SettingsDialog
 from .song_pipeline import SongFile, SongSession, make_song_stream
+from .song_stream import RATE, SongOverload
 from .transcript_model import TranscriptEntry, TranscriptModel
+from .window_chrome import ChromeWindow
 
 ROOT = DATA_DIR
+WAITING_FOR_AUDIO = "音源已打开，但尚未收到新的音频包。请检查输入设备或播放来源。"
 NAMES = {"zh": "普通话", "yue": "粤语", "en": "英文"}
+LOGO = Path(__file__).with_name("assets") / "yuepu-logo.png"
+WELCOME_LINES = (
+    (5, "夜深了，想翻译点什么？", "夜喇，想譯啲咩？"),
+    (11, "早上好，今天想翻译点什么？", "早晨，今日想譯啲咩？"),
+    (14, "中午好，想从哪一句开始？", "午安，想由邊句開始？"),
+    (18, "下午好，今天想翻译点什么？", "下晝好，今日想譯啲咩？"),
+    (24, "晚上好，想翻译哪一句？", "夜晚好，想譯邊句？"),
+)
+
+
+def welcome_greeting(hour):
+    return next(random.choice((zh, yue)) for end_hour, zh, yue in WELCOME_LINES if hour < end_hour)
 
 
 class PairDelegate(QStyledItemDelegate):
@@ -93,10 +131,15 @@ class PairDelegate(QStyledItemDelegate):
         active = entry.status in {"识别中", "翻译中"}
         source = entry.source or ("正在识别…" if active else "未完成有效语句识别")
         target = entry.target or (entry.status + "…" if active else entry.status)
-        for text, confirmed in ((source, entry.source_confirmed), (target, entry.target_confirmed)):
+        columns = (
+            [(entry.source, len(entry.source))]
+            if entry.is_capture_notice
+            else [(source, entry.source_confirmed), (target, entry.target_confirmed)]
+        )
+        for text, confirmed in columns:
             doc = QTextDocument()
             doc.setDocumentMargin(0)
-            doc.setDefaultFont(QFont("Microsoft YaHei UI", self.font_size))
+            doc.setDefaultFont(QFont("Microsoft YaHei UI", self.font_size, QFont.Weight.Medium))
             option = QTextOption()
             option.setWrapMode(QTextOption.WrapAtWordBoundaryOrAnywhere)
             doc.setDefaultTextOption(option)
@@ -106,9 +149,9 @@ class PairDelegate(QStyledItemDelegate):
             draft.setForeground(QColor(self.colors["draft"]))
             cursor.insertText(text[:confirmed], fixed)
             cursor.insertText(text[confirmed:], draft)
-            doc.setTextWidth(max(80, (width // 2) - 58))
+            doc.setTextWidth(max(80, width // len(columns) - 36))
             docs.append(doc)
-        height = max(104, int(max(d.size().height() for d in docs)) + 66)
+        height = max(72, int(max(d.size().height() for d in docs)) + 43)
         self.cache[key] = (docs, height)
         self.heights[(entry.key, width, self.font_size)] = (entry.revision, height)
         while len(self.cache) > 600:
@@ -120,7 +163,7 @@ class PairDelegate(QStyledItemDelegate):
     def sizeHint(self, option, index):
         entry = index.data(Qt.UserRole)
         if entry is None:
-            return QSize(100, 104)
+            return QSize(100, 72)
         width = max(300, self.view.viewport().width())
         key = (entry.key, width, self.font_size)
         cached = self.heights.get(key)
@@ -140,29 +183,42 @@ class PairDelegate(QStyledItemDelegate):
             rect, QColor(self.colors["selected"] if selected else self.colors["paper"])
         )
         middle = rect.left() + rect.width() // 2
-        if not selected:
+        if not selected and not entry.is_capture_notice:
             painter.fillRect(
                 middle, rect.top(), rect.width() // 2, rect.height(), QColor(self.colors["target"])
             )
+        elif selected:
+            painter.fillRect(rect.left(), rect.top(), 3, rect.height(), QColor(self.colors["text"]))
         painter.setPen(QColor(self.colors["border"]))
-        painter.drawLine(middle, rect.top(), middle, rect.bottom())
+        if not entry.is_capture_notice:
+            painter.drawLine(middle, rect.top(), middle, rect.bottom())
         painter.drawLine(rect.left(), rect.bottom(), rect.right(), rect.bottom())
-        painter.setFont(QFont("Microsoft YaHei UI", 9))
+        metadata_font = QFont("Microsoft YaHei UI")
+        metadata_font.setPixelSize(15)
+        painter.setFont(metadata_font)
         painter.setPen(QColor(self.colors["muted"]))
+        source_label = (
+            "收音中断"
+            if entry.is_capture_notice
+            else NAMES.get(entry.source_language, entry.source_language)
+        )
         painter.drawText(
-            rect.left() + 26,
-            rect.top() + 25,
-            f"{entry.timestamp}   ·   {NAMES.get(entry.source_language, entry.source_language)}",
+            rect.left() + 16,
+            rect.top() + 20,
+            f"{entry.timestamp}   ·   {source_label}",
         )
         painter.setPen(QColor(self.colors["muted"]))
-        painter.drawText(
-            middle + 26,
-            rect.top() + 25,
-            f"{NAMES.get(entry.target_language, entry.target_language)}   ·   {entry.status}",
-        )
-        for x, doc, is_target in ((rect.left() + 26, docs[0], False), (middle + 26, docs[1], True)):
+        if not entry.is_capture_notice:
+            painter.drawText(
+                middle + 16,
+                rect.top() + 20,
+                f"{NAMES.get(entry.target_language, entry.target_language)}   ·   {entry.status}",
+            )
+        for index, doc in enumerate(docs):
+            is_target = index == 1
+            x = (middle if is_target else rect.left()) + 16
             painter.save()
-            painter.translate(x, rect.top() + 42)
+            painter.translate(x, rect.top() + 28)
             context = doc.documentLayout().PaintContext()
             context.palette.setColor(
                 context.palette.ColorRole.Text,
@@ -170,6 +226,47 @@ class PairDelegate(QStyledItemDelegate):
             )
             doc.documentLayout().draw(painter, context)
             painter.restore()
+        painter.restore()
+
+
+class HistoryDelegate(QStyledItemDelegate):
+    def __init__(self, parent):
+        super().__init__(parent)
+        self.colors = THEMES["dark"]
+
+    def sizeHint(self, option, index):
+        return QSize(0, option.fontMetrics.height() + 37)
+
+    def paint(self, painter, option, index):
+        styled = QStyleOptionViewItem(option)
+        self.initStyleOption(styled, index)
+        title, _, timestamp = index.data(Qt.DisplayRole).partition("\n")
+        styled.text = ""
+        styled.widget.style().drawControl(QStyle.CE_ItemViewItem, styled, painter, styled.widget)
+
+        rect = styled.rect.adjusted(12, 8, -12, -8)
+        enabled = styled.state & QStyle.State_Enabled
+        painter.save()
+        painter.setClipRect(rect)
+        title_font = QFont(styled.font)
+        title_font.setWeight(QFont.Weight.DemiBold)
+        painter.setFont(title_font)
+        painter.setPen(QColor(self.colors["text" if enabled else "disabled"]))
+        metrics = QFontMetrics(title_font)
+        painter.drawText(
+            rect.left(),
+            rect.top() + metrics.ascent(),
+            metrics.elidedText(title, Qt.ElideRight, rect.width()),
+        )
+        metadata = QFont(styled.font)
+        metadata.setPixelSize(15)
+        painter.setFont(metadata)
+        painter.setPen(QColor(self.colors["muted" if enabled else "disabled"]))
+        painter.drawText(
+            rect.left(),
+            rect.top() + metrics.height() + QFontMetrics(metadata).ascent() + 2,
+            timestamp,
+        )
         painter.restore()
 
 
@@ -271,8 +368,27 @@ class SmoothTranscriptView(QListView):
         self.paint_times.append((time.perf_counter() - started) * 1000)
 
 
-class Window(QMainWindow):
-    def __init__(self, muted=False):
+class AudioOptionsMenu(QMenu):
+    def __init__(self, controls, parent):
+        super().__init__(parent)
+        self.controls = controls
+        for control in controls:
+            control.installEventFilter(self)
+
+    def eventFilter(self, watched, event):
+        if event.type() == QEvent.KeyPress and event.key() in (Qt.Key_Tab, Qt.Key_Backtab):
+            visible = [control for control in self.controls if control.isVisible()]
+            if watched in visible:
+                backward = event.key() == Qt.Key_Backtab or event.modifiers() & Qt.ShiftModifier
+                step = -1 if backward else 1
+                reason = Qt.BacktabFocusReason if backward else Qt.TabFocusReason
+                visible[(visible.index(watched) + step) % len(visible)].setFocus(reason)
+                return True
+        return super().eventFilter(watched, event)
+
+
+class Window(ChromeWindow):
+    def __init__(self, muted=False, *, history=None):
         super().__init__()
         self.preferences = settings_store()
         preference_warning = ""
@@ -282,15 +398,18 @@ class Window(QMainWindow):
             self.defaults = Preferences()
             preference_warning = "已保存的首选项无法读取，已使用默认设置；请在设置中重新保存。"
         self.theme = "dark"
-        self.setWindowTitle("粤普随译 · YUEPU TERMINAL")
-        self.resize(1240, 850)
-        self.setMinimumSize(960, 700)
+        self.setWindowTitle(APP_NAME)
+        self.setWindowIcon(QIcon(str(LOGO.with_suffix(".ico"))))
+        self.resize(1180, 790)
+        self.setMinimumSize(800, 520)
         self.events = queue.Queue()
         self.jobs = queue.Queue(maxsize=2)
         self.cancel = threading.Event()
         self.engine = Engine()
+        self.playback_token = None
         self.player = AudioPlayer(
-            lambda message: self.events.put((self.epoch, 0, "audio_error", message)), muted=muted
+            lambda message: self.events.put((self.epoch, 0, "audio_error", (None, message))),
+            muted=muted,
         )
         self.microphone = None
         self.song_session = None
@@ -310,10 +429,22 @@ class Window(QMainWindow):
             cloud_warning = str(exc)
         self.epoch = self.pending = 0
         self.sequence = 0
-        self.ready = self.listening = self.closing = False
+        self.listening = self.closing = False
+        self.capture_started = False
+        self.capture_waiting = False
+        self.capture_notice = ""
         self.model = TranscriptModel()
         self.active_ids = set()
         self.unread = 0
+        self.history = history if history is not None else SessionHistory()
+        self.session_id = uuid4().hex
+        self.session_heading = ""
+        self.history_dirty = self.restoring_history = False
+        self.drafts = {}
+        self.history_timer = QTimer(self)
+        self.history_timer.setSingleShot(True)
+        self.history_timer.setInterval(900)
+        self.history_timer.timeout.connect(self.save_history)
         self._build()
         self.apply_preferences()
         self.apply_theme(self.preferences.value("appearance", "dark"), persist=False)
@@ -332,6 +463,7 @@ class Window(QMainWindow):
             self.status(cloud_warning, True)
         elif preference_warning:
             self.status(preference_warning, True)
+        self.refresh_history()
 
     def button(self, text, callback, kind="", parent=None):
         button = QPushButton(text, parent)
@@ -348,234 +480,290 @@ class Window(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
         self.setCentralWidget(host)
-        header = QFrame()
-        header.setObjectName("header")
-        top = QHBoxLayout(header)
-        top.setContentsMargins(22, 12, 22, 12)
-        top.setSpacing(12)
-        mark = QLabel("YP / ")
-        mark.setObjectName("brandMark")
-        top.addWidget(mark)
-        branding = QVBoxLayout()
-        branding.setSpacing(2)
-        brand = QLabel("粤普随译")
-        brand.setObjectName("brand")
-        branding.addWidget(brand)
-        branding.addWidget(self.label("YUEPU  /  INTERPRETATION TERMINAL", "eyebrow"))
-        top.addLayout(branding)
-        top.addStretch()
-        self.dark_button = self.button("深色", lambda: self.apply_theme("dark"), "theme")
-        self.light_button = self.button("浅色", lambda: self.apply_theme("light"), "theme")
-        self.dark_button.setProperty("appearance", "dark")
-        self.light_button.setProperty("appearance", "light")
-        self.dark_button.setAccessibleName("切换深色主题")
-        self.light_button.setAccessibleName("切换浅色主题")
-        for button in (self.dark_button, self.light_button):
-            button.setCheckable(True)
-            top.addWidget(button)
-        top.addSpacing(8)
-        self.cloud_button = self.button("联网设置", self.cloud_settings, "quiet")
-        top.addWidget(self.cloud_button)
-        self.settings_button = self.button("设置", self.settings, "quiet")
-        top.addWidget(self.settings_button)
-        root.addWidget(header)
 
-        content = QWidget()
-        shell = QHBoxLayout(content)
-        shell.setContentsMargins(22, 20, 22, 20)
-        shell.setSpacing(22)
         self.sidebar = QFrame()
         self.sidebar.setObjectName("sidebar")
-        self.sidebar.setFixedWidth(238)
-        sidebar_layout = QVBoxLayout(self.sidebar)
-        sidebar_layout.setContentsMargins(18, 20, 18, 18)
-        sidebar_layout.setSpacing(10)
-        control_scroll = QScrollArea()
-        control_scroll.setObjectName("controlScroll")
-        control_scroll.setWidgetResizable(True)
-        control_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        control_scroll.setFrameShape(QFrame.NoFrame)
-        control_fields = QWidget()
-        control_fields.setObjectName("controlFields")
-        controls = QVBoxLayout(control_fields)
-        controls.setContentsMargins(0, 0, 0, 0)
-        controls.setSpacing(10)
-        controls.addWidget(self.label("CONTROL / 控制台", "eyebrow"))
-        controls.addWidget(self.label("会话控制", "panelTitle"))
-        controls.addSpacing(12)
-        controls.addWidget(self.label("01 / 输入通道", "section"))
-        self.source_box = QComboBox()
-        self.source_box.addItems(["麦克风", "设备播放声音"])
-        self.source_box.setAccessibleName("声音来源")
-        self.source_box.currentTextChanged.connect(self.source_changed)
-        controls.addWidget(self.source_box)
-        controls.addSpacing(8)
-        sensitivity_label = self.label("收音灵敏度", "section")
-        controls.addWidget(sensitivity_label)
-        self.sensitivity_box = QComboBox()
-        self.sensitivity_box.setAccessibleName("收音灵敏度")
-        sensitivity_label.setBuddy(self.sensitivity_box)
-        for key, profile in VOICE_PROFILES.items():
-            self.sensitivity_box.addItem(profile.label, key)
-        self.sensitivity_box.setToolTip("仅影响实时收音。停止收音后可切换，选择会自动保存。")
-        controls.addWidget(self.sensitivity_box)
-        self.sensitivity_hint = self.label("", "muted")
-        self.sensitivity_hint.setWordWrap(True)
-        controls.addWidget(self.sensitivity_hint)
-        self.sensitivity_box.currentIndexChanged.connect(self.sensitivity_changed)
-        controls.addSpacing(8)
-        direction_heading = QHBoxLayout()
-        direction_heading.addWidget(self.label("02 / 翻译方向", "section"))
-        direction_heading.addStretch()
-        self.swap_button = self.button("交换方向", self.swap, "swap")
-        self.swap_button.setAccessibleName("交换翻译方向")
-        self.swap_button.setToolTip("交换粤语与普通话的翻译方向")
-        direction_heading.addWidget(self.swap_button)
-        controls.addLayout(direction_heading)
-        self.direction_box = QComboBox()
-        self.direction_box.addItems(["粤语 → 普通话", "普通话 → 粤语"])
-        self.direction_box.setAccessibleName("翻译方向")
-        self.direction_box.currentIndexChanged.connect(self.direction_changed)
-        controls.addWidget(self.direction_box)
-        controls.addSpacing(8)
-        controls.addWidget(self.label("03 / 识别与播报", "section"))
-        self.profile_box = QComboBox()
-        self.profile_box.addItems(["flash", "pro"])
-        self.profile_box.setAccessibleName("识别模式")
-        self.profile_box.setToolTip(
-            "flash：轻量实时字幕，译文随后更新。\npro：保留段落检测与断句，轻量草稿先显示，句末由较大模型复核确认。"
-        )
-        self.profile_box.currentIndexChanged.connect(self.source_changed)
-        controls.addWidget(self.profile_box)
-        self.auto_box = QCheckBox("自动播报译音")
-        self.auto_box.setChecked(True)
-        controls.addWidget(self.auto_box)
-        controls.addStretch()
-        self.mode_hint = self.label("", "muted")
-        self.mode_hint.setWordWrap(True)
-        controls.addWidget(self.mode_hint)
-        control_scroll.setWidget(control_fields)
-        sidebar_layout.addWidget(control_scroll, 1)
-        sidebar_layout.addSpacing(8)
+        sidebar = QVBoxLayout(self.sidebar)
+        sidebar.setContentsMargins(24, 17, 18, 20)
+        sidebar.setSpacing(10)
+        self.new_button = self.button("＋  新会话", self.new_session, "historyNew")
+        sidebar.addWidget(self.new_button)
+        sidebar.addSpacing(10)
+        history_label = self.label("会话历史", "section")
+        history_label.setContentsMargins(12, 0, 0, 0)
+        sidebar.addWidget(history_label)
+        self.history_list = QListWidget()
+        self.history_list.setObjectName("historyList")
+        self.history_list.setAccessibleName("会话历史")
+        self.history_list.setMouseTracking(True)
+        self.history_delegate = HistoryDelegate(self.history_list)
+        self.history_list.setItemDelegate(self.history_delegate)
+        self.history_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.history_list.itemClicked.connect(self.open_session)
+        self.history_list.itemActivated.connect(self.open_session)
+        sidebar.addWidget(self.history_list, 1)
+        self.history_empty = self.label("暂无会话", "muted")
+        self.history_empty.setContentsMargins(12, 2, 0, 0)
+        self.history_empty.setAlignment(Qt.AlignTop)
+        sidebar.addWidget(self.history_empty, 1)
+        workspace = QWidget()
+        workspace_layout = QVBoxLayout(workspace)
+        workspace_layout.setContentsMargins(0, 0, 0, 0)
+        workspace_layout.setSpacing(0)
+        self.history_splitter = HistorySplitter(self.sidebar, workspace, self.preferences)
+
+        header = QFrame()
+        header.setObjectName("header")
+        header.setMinimumHeight(52)
+        top = QHBoxLayout(header)
+        self.header_layout = top
+        self.update_header_margins()
+        top.setSpacing(10)
+        self.sidebar_toggle = QToolButton(header)
+        self.sidebar_toggle.setObjectName("sidebarToggle")
+        self.sidebar_toggle.setFixedSize(36, 36)
+        self.sidebar_toggle.setIconSize(QSize(19, 19))
+        self.sidebar_toggle.setCursor(Qt.PointingHandCursor)
+        self.sidebar_toggle.setCheckable(True)
+        self.sidebar_toggle.clicked.connect(self.history_splitter.set_sidebar_expanded)
+        self.history_splitter.sidebar_toggled.connect(self.update_sidebar_toggle)
+        top.addWidget(self.sidebar_toggle)
+        top.addWidget(self.label(APP_NAME, "brand"))
+        top.addStretch(1)
         self.network_pill = self.label("本地离线", "pill")
-        self.network_pill.setToolTip("默认仅使用本地模型；联网增强需手动开启。")
-        sidebar_layout.addWidget(self.network_pill)
-        self.load_button = self.button("加载离线模型", self.load, "primary")
-        sidebar_layout.addWidget(self.load_button)
-        self.record_button = self.button("开始收音", self.toggle_capture, "primary")
-        sidebar_layout.addWidget(self.record_button)
-        self.stop_button = self.button("停止任务    Esc", self.stop)
-        sidebar_layout.addWidget(self.stop_button)
-        shell.addWidget(self.sidebar)
+        self.network_pill.setToolTip("推理仅使用本机模型。")
+        top.addWidget(self.network_pill)
+        self.settings_button = QToolButton()
+        self.settings_button.setObjectName("tool")
+        self.settings_button.setText("设置")
+        self.settings_button.setPopupMode(QToolButton.InstantPopup)
+        settings_menu = QMenu(self.settings_button)
+        settings_menu.setObjectName("settingsMenu")
+        self.preferences_action = settings_menu.addAction("首选项…", self.settings)
+        self.cloud_action = settings_menu.addAction("联网设置…", self.cloud_settings)
+        settings_menu.addSeparator()
+        appearance = settings_menu.addMenu("外观")
+        appearance.setObjectName("settingsMenu")
+        appearance_group = QActionGroup(appearance)
+        self.theme_actions = {}
+        for theme, title in (("dark", "深色主题"), ("light", "浅色主题")):
+            action = appearance.addAction(title, partial(self.apply_theme, theme))
+            action.setCheckable(True)
+            appearance_group.addAction(action)
+            self.theme_actions[theme] = action
+        self.settings_button.setMenu(settings_menu)
+        top.addWidget(self.settings_button)
+        top.addWidget(self.caption_controls(header))
+        self.set_caption_area(header)
+        root.addWidget(header)
+        root.addWidget(self.history_splitter, 1)
 
-        body = QVBoxLayout()
-        body.setSpacing(16)
-        heading = QHBoxLayout()
-        title = QVBoxLayout()
-        title.setSpacing(4)
-        title.addWidget(self.label("实时同传", "title"))
-        title.addWidget(self.label("LIVE INTERPRETATION  /  双语会话工作区", "eyebrow"))
-        heading.addLayout(title)
-        heading.addStretch()
-        self.count_label = self.label("0 条字幕", "count")
-        heading.addWidget(self.count_label, 0, Qt.AlignTop)
-        body.addLayout(heading)
+        body = QWidget()
+        self.body_layout = QVBoxLayout(body)
+        self.body_layout.setContentsMargins(30, 10, 30, 22)
+        self.body_layout.setSpacing(12)
+        workspace_layout.addWidget(body, 1)
+        self.body_layout.addStretch(1)
 
-        tabs = QHBoxLayout()
-        tabs.setSpacing(0)
-        self.live_tab = self.button("实时字幕", lambda: self.show_composer(False), "tab")
-        self.text_tab = self.button("文字输入", lambda: self.show_composer(True), "tab")
-        for tab in (self.live_tab, self.text_tab):
-            tab.setCheckable(True)
-            tabs.addWidget(tab)
-        self.live_tab.setChecked(True)
-        tabs.addStretch()
-        self.file_button = self.button("导入音频", self.open_audio, "quiet")
-        tabs.addWidget(self.file_button)
-        self.replay_button = self.button("播报选中句", self.replay, "quiet")
-        self.replay_button.setToolTip("播报选中的译文；未选中时播报最后一句")
-        tabs.addWidget(self.replay_button)
-        body.addLayout(tabs)
-        work = QFrame()
-        work.setObjectName("workarea")
-        area = QVBoxLayout(work)
-        area.setContentsMargins(1, 1, 1, 1)
+        self.workarea = QFrame()
+        self.workarea.setObjectName("workarea")
+        area = QVBoxLayout(self.workarea)
+        area.setContentsMargins(0, 0, 0, 0)
         area.setSpacing(0)
+        self.session_title = self.label("", "title")
+        self.session_title.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+        area.addWidget(self.session_title)
+        toolbar = QHBoxLayout()
+        toolbar.setContentsMargins(10, 0, 0, 6)
+        toolbar.setSpacing(4)
+        self.count_label = self.label("", "count")
+        toolbar.addWidget(self.count_label)
+        toolbar.addStretch()
+        self.latest_button = self.button("回到最新", self.go_latest, "quiet")
+        self.latest_button.hide()
+        toolbar.addWidget(self.latest_button)
+        self.replay_button = self.button("播报", self.replay, "quiet")
+        self.replay_button.setToolTip(
+            "播报选中的译文，未选中时播报最后一句。译稿与当前原文未核对时，仅播报已固定前文。"
+        )
+        toolbar.addWidget(self.replay_button)
+        self.copy_button = self.button("复制", self.copy_records, "quiet")
+        self.copy_button.setToolTip("复制选中的字幕；未选中时复制全部")
+        toolbar.addWidget(self.copy_button)
+        self.export_button = self.button("导出", self.export_records, "quiet")
+        self.export_button.setToolTip("导出此会话的全部字幕")
+        toolbar.addWidget(self.export_button)
+        self.clear_button = self.button("清空", self.clear_records, "quiet")
+        self.clear_button.setToolTip("清空字幕并从会话历史中移除")
+        toolbar.addWidget(self.clear_button)
+        area.addLayout(toolbar)
+
         language_bar = QFrame()
         language_bar.setObjectName("languages")
         languages = QHBoxLayout(language_bar)
-        languages.setContentsMargins(26, 16, 26, 16)
+        languages.setContentsMargins(16, 9, 16, 9)
         languages.setSpacing(0)
-        self.source_header = QLabel("原文 / 粤语")
-        self.target_header = QLabel("译文 / 普通话")
-        for label in (self.source_header, self.target_header):
-            label.setObjectName("panelTitle")
-            languages.addWidget(label, 1)
-        self.target_header.setContentsMargins(26, 0, 0, 0)
+        languages.addWidget(self.label("原文", "panelTitle"), 1)
+        target_header = self.label("译文", "panelTitle")
+        target_header.setContentsMargins(16, 0, 0, 0)
+        languages.addWidget(target_header, 1)
         area.addWidget(language_bar)
         self.view = SmoothTranscriptView()
         self.view.setModel(self.model)
         self.delegate = PairDelegate(self.view)
         self.view.setItemDelegate(self.delegate)
-        self.view.setAccessibleName("按时间排列的原文与译文字幕，左右对应，可滚动回看")
+        self.view.setAccessibleName("字幕，原文在左，译文在右")
         self.view.position_changed.connect(self.position_changed)
+        self.view.selectionModel().selectionChanged.connect(self._buttons)
         area.addWidget(self.view, 1)
-        self.empty = TerminalEmpty(self.view.viewport())
-        foot = QHBoxLayout()
-        foot.setContentsMargins(18, 10, 18, 11)
-        self.cache_label = QLabel("仅本次会话 · 退出前请导出")
-        self.cache_label.setWordWrap(True)
-        self.cache_label.setToolTip("最多保留 10,000 条 / 原文译文合计 200 万字符")
-        self.cache_label.setObjectName("muted")
-        foot.addWidget(self.cache_label, 1)
-        self.latest_button = self.button("回到最新 ↓", self.go_latest, "quiet")
-        self.latest_button.hide()
-        foot.addWidget(self.latest_button)
-        self.copy_button = self.button("复制", self.copy_records, "quiet")
-        self.copy_button.setToolTip("复制选中的双语记录；未选中时复制全部记录")
-        self.clear_button = self.button("清空", self.clear_records, "quiet")
-        foot.addWidget(self.copy_button)
-        foot.addWidget(self.clear_button)
-        self.export_button = self.button("导出记录  ↗", self.export_records)
-        foot.addWidget(self.export_button)
-        area.addLayout(foot)
-        body.addWidget(work, 1)
-        self.composer = QWidget()
-        compose = QHBoxLayout(self.composer)
-        compose.setContentsMargins(0, 0, 0, 0)
-        self.input = QPlainTextEdit()
-        self.input.setPlaceholderText("输入短句，Ctrl + Enter 翻译（每次最多 120 字）")
-        self.input.setMaximumHeight(92)
-        self.input.setAccessibleName("要翻译的短句")
-        compose.addWidget(self.input, 1)
-        self.translate_button = self.button("翻译输入", self.translate_input, "primary")
-        compose.addWidget(self.translate_button)
-        body.addWidget(self.composer)
-        self.composer.hide()
-        shell.addLayout(body, 1)
-        root.addWidget(content, 1)
-        statusbar = QFrame()
-        statusbar.setObjectName("statusbar")
-        bottom = QHBoxLayout(statusbar)
-        bottom.setContentsMargins(22, 9, 22, 9)
-        bottom.setSpacing(16)
-        self.state_label = self.label("待机 / STANDBY", "state")
-        bottom.addWidget(self.state_label)
-        self.status_label = QLabel("先加载离线模型，再开始交流。")
+        self.body_layout.addWidget(self.workarea, 1)
+
+        composer_wrap = QWidget()
+        composer_wrap.setMaximumWidth(900)
+        wrap = QVBoxLayout(composer_wrap)
+        wrap.setContentsMargins(0, 0, 0, 0)
+        wrap.setSpacing(4)
+        self.empty_brand = QWidget()
+        brand_layout = QHBoxLayout(self.empty_brand)
+        brand_layout.setContentsMargins(0, 0, 0, 22)
+        brand_layout.setSpacing(14)
+        brand_image = QLabel()
+        brand_image.setPixmap(QIcon(str(LOGO)).pixmap(QSize(46, 46), self.devicePixelRatioF()))
+        brand_layout.addWidget(brand_image, 0, Qt.AlignVCenter)
+        self.welcome_title = self.label(welcome_greeting(datetime.now().hour), "welcomeTitle")
+        brand_layout.addWidget(self.welcome_title)
+        wrap.addWidget(self.empty_brand, 0, Qt.AlignHCenter)
+        self.composer = QFrame()
+        self.composer.setObjectName("composer")
+        compose = QVBoxLayout(self.composer)
+        compose.setContentsMargins(12, 10, 12, 10)
+        compose.setSpacing(4)
+        self.input = ComposerInput()
+        self.input.setObjectName("composerInput")
+        self.input.setPlaceholderText("输入要翻译的文字，或开始收音")
+        self.input.setAccessibleName("要翻译的文字")
+        self.input.setTabChangesFocus(True)
+        self.input.setFixedHeight(76)
+        self.input.textChanged.connect(self._buttons)
+        compose.addWidget(self.input)
+
+        bar = QWidget()
+        bar.setObjectName("composerBar")
+        self.composer_bar = QGridLayout(bar)
+        self.composer_bar.setContentsMargins(0, 0, 0, 0)
+        self.composer_bar.setSpacing(8)
+        self.composer_bar.setColumnStretch(1, 1)
+
+        tools = QWidget()
+        controls = QHBoxLayout(tools)
+        controls.setContentsMargins(0, 0, 0, 0)
+        controls.setSpacing(6)
+        self.direction_box = QComboBox()
+        self.direction_box.setObjectName("directionSelect")
+        self.direction_box.addItems(["粤语 → 普通话", "普通话 → 粤语"])
+        self.direction_box.setAccessibleName("翻译方向")
+        controls.addWidget(self.direction_box)
+        self.file_button = self.button("打开音频", self.open_audio, "quiet")
+        controls.addWidget(self.file_button)
+        self.composer_bar.addWidget(tools, 0, 0, Qt.AlignLeft)
+        self.composer_tools = tools
+
+        self.composer_actions = QWidget()
+        actions = QHBoxLayout(self.composer_actions)
+        actions.setContentsMargins(0, 0, 0, 0)
+        actions.setSpacing(6)
+        self.audio_button = QToolButton()
+        self.audio_button.setObjectName("audioMenu")
+        self.audio_button.setText("收音选项")
+        self.audio_button.setPopupMode(QToolButton.InstantPopup)
+        self._build_audio_menu()
+        actions.addWidget(self.audio_button)
+        self.record_button = self.button("开始收音", self.toggle_capture, "primary")
+        actions.addWidget(self.record_button)
+        self.translate_button = self.button("翻译", self.translate_input, "primary")
+        self.translate_button.setToolTip("翻译文字 (Ctrl + Enter)")
+        actions.addWidget(self.translate_button)
+        self.compact_layout = None
+        self.reflow_workspace()
+        compose.addWidget(bar)
+        wrap.addWidget(self.composer)
+
+        feedback = QHBoxLayout()
+        feedback.setContentsMargins(8, 0, 8, 0)
+        feedback.setSpacing(6)
+        self.status_label = self.label("", "statusLabel")
         self.status_label.setWordWrap(True)
-        self.status_label.setObjectName("muted")
-        bottom.addWidget(self.status_label, 1)
-        bottom.addWidget(self.label("Ctrl + Enter  翻译   /   Esc  停止", "muted"))
-        root.addWidget(statusbar)
+        feedback.addWidget(self.status_label, 1)
+        self.stop_button = self.button("取消任务", self.stop, "quiet")
+        self.stop_button.setToolTip("取消仍在处理的内容 (Esc)")
+        feedback.addWidget(self.stop_button)
+        wrap.addLayout(feedback)
+
+        composer_line = QHBoxLayout()
+        composer_line.addStretch(1)
+        composer_line.addWidget(composer_wrap, 100)
+        composer_line.addStretch(1)
+        self.body_layout.addLayout(composer_line)
+        self.body_layout.addStretch(1)
+        self.history_splitter.sidebar_resized.connect(self.reflow_workspace)
+
         self.number_mode = "original"
-        self.model.rowsInserted.connect(self._model_changed)
-        self.model.rowsRemoved.connect(self._model_changed)
-        self.model.modelReset.connect(self._model_changed)
-        self.view.selectionModel().selectionChanged.connect(lambda: self._buttons())
+        for signal in (self.model.rowsInserted, self.model.rowsRemoved, self.model.modelReset):
+            signal.connect(self._model_changed)
+            signal.connect(self.schedule_history_save)
+        self.model.dataChanged.connect(self.schedule_history_save)
+        self._model_changed()
+
+    def _build_audio_menu(self):
+        options = QWidget()
+        options.setMinimumWidth(296)
+        form = QFormLayout(options)
+        form.setContentsMargins(14, 12, 14, 12)
+        form.setHorizontalSpacing(16)
+        form.setVerticalSpacing(12)
+        self.source_box = QComboBox()
+        self.source_box.addItems(["麦克风", "设备播放声音"])
+        self.source_box.setAccessibleName("声音来源")
+        self.source_box.currentIndexChanged.connect(self.source_changed)
+        form.addRow("音源", self.source_box)
+
+        self.profile_box = QComboBox()
+        self.profile_box.addItem("快速  (flash)", "flash")
+        self.profile_box.addItem("精细  (pro)", "pro")
+        self.profile_box.setAccessibleName("识别模式")
+        self.profile_box.setToolTip("快速优先显示字幕；精细模式会在句末复核和修正。")
+        self.profile_box.currentIndexChanged.connect(self.source_changed)
+        form.addRow("识别模式", self.profile_box)
+
+        self.sensitivity_box = QComboBox()
+        for key, profile in VOICE_PROFILES.items():
+            self.sensitivity_box.addItem(profile.label, key)
+        self.sensitivity_box.setAccessibleName("收音灵敏度")
+        self.sensitivity_box.currentIndexChanged.connect(self.sensitivity_changed)
+        form.addRow("灵敏度", self.sensitivity_box)
+        self.auto_box = QCheckBox("自动播报译音")
+        self.auto_box.setChecked(True)
+        form.addRow(self.auto_box)
+        self.caption_only_hint = self.label("设备收音期间仅显示字幕", "muted")
+        form.addRow(self.caption_only_hint)
+        menu = AudioOptionsMenu(
+            (self.source_box, self.profile_box, self.sensitivity_box, self.auto_box),
+            self.audio_button,
+        )
+        menu.setObjectName("audioOptions")
+        settings_action = QWidgetAction(menu)
+        settings_action.setDefaultWidget(options)
+        menu.addAction(settings_action)
+        options.setFocusPolicy(Qt.StrongFocus)
+        options.setFocusProxy(self.source_box)
+        menu.aboutToShow.connect(self.source_changed)
+        menu.aboutToShow.connect(lambda: QTimer.singleShot(0, self.source_box.setFocus))
+        self.audio_button.setMenu(menu)
 
     @staticmethod
     def label(text, kind):
         label = QLabel(text)
+        label.setTextFormat(Qt.PlainText)
         label.setObjectName(kind)
         return label
 
@@ -584,47 +772,204 @@ class Window(QMainWindow):
         app = QApplication.instance()
         app.setPalette(palette(self.theme))
         app.setStyleSheet(stylesheet(self.theme))
-        self.dark_button.setChecked(self.theme == "dark")
-        self.light_button.setChecked(self.theme == "light")
+        for name, action in self.theme_actions.items():
+            action.setChecked(name == self.theme)
         self.delegate.colors = THEMES[self.theme]
+        self.history_delegate.colors = THEMES[self.theme]
         self.delegate.cache.clear()
-        self.empty.set_theme(self.theme)
         self.view.viewport().update()
+        self.history_list.viewport().update()
+        self.reflow_workspace()
+        self.update_sidebar_toggle(self.history_splitter.sidebar_expanded)
         if persist:
             self.preferences.setValue("appearance", self.theme)
 
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        if hasattr(self, "empty"):
-            QTimer.singleShot(0, self._resize_empty)
-
-    def _resize_empty(self):
-        self.empty.setGeometry(self.view.viewport().rect())
+    def update_sidebar_toggle(self, expanded):
+        self.sidebar_toggle.setChecked(expanded)
+        label = "收起会话侧栏" if expanded else "展开会话侧栏"
+        self.sidebar_toggle.setAccessibleName(label)
+        self.sidebar_toggle.setToolTip(label)
+        ratio = self.sidebar_toggle.devicePixelRatioF()
+        pixmap = QPixmap(round(19 * ratio), round(19 * ratio))
+        pixmap.setDevicePixelRatio(ratio)
+        pixmap.fill(Qt.transparent)
+        with QPainter(pixmap) as painter:
+            painter.setRenderHint(QPainter.Antialiasing)
+            color = QColor(THEMES[self.theme]["text"])
+            painter.setPen(QPen(color, 1.35))
+            painter.drawRoundedRect(QRectF(2, 3.5, 15, 12), 2, 2)
+            painter.drawLine(7, 4, 7, 15)
+            if expanded:
+                color.setAlpha(90)
+                painter.fillRect(QRectF(3.5, 5, 3, 9), color)
+        self.sidebar_toggle.setIcon(QIcon(pixmap))
 
     def _model_changed(self, *args):
+        if self.restoring_history:
+            return
         count = self.model.rowCount()
-        self.empty.setVisible(count == 0)
-        self._resize_empty()
+        self.workarea.setVisible(bool(count))
+        self.empty_brand.setVisible(not count)
+        self.body_layout.setStretch(0, 4 if count == 0 else 0)
+        self.body_layout.setStretch(3, 6 if count == 0 else 0)
         self.count_label.setText(f"{count:,} 条字幕")
-        if self.model.evicted:
-            self.cache_label.setText(
-                f"已达缓存上限，最早 {self.model.evicted:,} 条已移出 · 请及时导出"
-            )
-        else:
-            self.cache_label.setText("仅本次会话 · 退出前请导出")
+        self.count_label.setToolTip(
+            f"已达单个会话容量上限，最早 {self.model.evicted:,} 条已移出。"
+            if self.model.evicted
+            else ""
+        )
         self._buttons()
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if hasattr(self, "composer_actions"):
+            self.reflow_workspace()
+
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.WindowStateChange and hasattr(self, "header_layout"):
+            self.update_header_margins()
+
+    def update_header_margins(self):
+        inset = 0 if self._integrated_caption and self.isMaximized() else 8
+        self.header_layout.setContentsMargins(25, inset, inset, inset)
+
+    def reflow_workspace(self, *args):
+        controls_width = (
+            self.composer_tools.sizeHint().width() + self.composer_actions.sizeHint().width()
+        )
+        compact = self.workspace_width() < max(640, controls_width + 100)
+        if compact != self.compact_layout:
+            self.compact_layout = compact
+            self.welcome_title.setProperty("compact", compact)
+            self.welcome_title.style().unpolish(self.welcome_title)
+            self.welcome_title.style().polish(self.welcome_title)
+            self.welcome_title.updateGeometry()
+            self.body_layout.setContentsMargins(
+                20 if compact else 30, 10, 20 if compact else 30, 22
+            )
+            self.composer_bar.removeWidget(self.composer_actions)
+            if compact:
+                self.composer_bar.addWidget(self.composer_actions, 1, 0, 1, 2, Qt.AlignRight)
+            else:
+                self.composer_bar.addWidget(self.composer_actions, 0, 1, Qt.AlignRight)
+        self.update_session_heading()
+
+    def workspace_width(self):
+        sidebar = self.history_splitter.sidebar_width
+        return self.width() - sidebar - (self.history_splitter.handleWidth() if sidebar else 0)
+
+    def update_session_heading(self):
+        title = self.session_title.fontMetrics().elidedText(
+            self.session_heading, Qt.ElideRight, max(0, self.workspace_width() - 80)
+        )
+        self.session_title.setText(title)
+        self.session_title.setVisible(bool(title))
+
+    def schedule_history_save(self, *args):
+        if not self.restoring_history and self.model.items:
+            self.history_dirty = True
+            if not self.history_timer.isActive():
+                self.history_timer.start()
+
+    def save_history(self):
+        self.history_timer.stop()
+        if not self.history_dirty:
+            return True
+        try:
+            try:
+                self.history.save(self.session_id, self.model.items)
+            except SessionHistoryConflict:
+                session_id = uuid4().hex
+                self.history.save(session_id, self.model.items)
+                self.session_id = session_id
+                self.status("该会话已在另一个窗口变更，这里的字幕已另存为新会话。")
+        except SessionHistoryError as exc:
+            self.status(str(exc) + " 可先导出字幕。", True)
+            return False
+        self.history_dirty = False
+        self.refresh_history()
+        return True
+
+    def refresh_history(self):
+        try:
+            summaries = self.history.list_sessions()
+        except SessionHistoryError as exc:
+            self.status(str(exc), True)
+            return
+        scrollbar = self.history_list.verticalScrollBar()
+        position = scrollbar.value()
+        self.history_list.clear()
+        title = ""
+        for summary in summaries:
+            timestamp = summary.updated_at.strftime("%m/%d %H:%M")
+            item = QListWidgetItem(f"{summary.title}\n{timestamp}")
+            item.setData(Qt.UserRole, summary.id)
+            item.setToolTip(
+                f"<p>{escape(summary.title)}<br>{summary.updated_at:%Y-%m-%d %H:%M}</p>"
+            )
+            self.history_list.addItem(item)
+            if summary.id == self.session_id:
+                title = summary.title
+                self.history_list.setCurrentItem(item)
+        scrollbar.setValue(position)
+        self.history_empty.setVisible(not summaries)
+        self.history_list.setVisible(bool(summaries))
+        self.session_heading = title
+        self.update_session_heading()
+        self.session_title.setToolTip(f"<p>{escape(title)}</p>" if title else "")
+
+    def new_session(self):
+        if not self.pending and not self.listening and not self.closing and self.save_history():
+            self.welcome_title.setText(welcome_greeting(datetime.now().hour))
+            self.switch_session(uuid4().hex, [])
+
+    def open_session(self, item):
+        session_id = item.data(Qt.UserRole)
+        if self.pending or self.listening or self.closing or session_id == self.session_id:
+            return
+        if not self.save_history():
+            self.refresh_history()
+            return
+        try:
+            entries = self.history.load(session_id)
+            if entries:
+                self.switch_session(session_id, entries)
+                return
+        except (SessionHistoryError, ValueError):
+            self.status("无法打开这次会话，请检查本地历史文件。", True)
+            self.refresh_history()
+            return
+        self.refresh_history()
+
+    def switch_session(self, session_id, entries):
+        self.playback_token = None
+        self.player.stop()
+        self.delegate.cache.clear()
+        self.delegate.heights.clear()
+        self.view.animation.stop()
+        self.restoring_history = True
+        try:
+            self.model.replace_entries(entries)
+        finally:
+            self.restoring_history = False
+        draft = self.input.toPlainText()
+        if draft:
+            self.drafts[self.session_id] = draft
+        else:
+            self.drafts.pop(self.session_id, None)
+        self.session_id = session_id
+        self.sequence = max((entry.key for entry in self.model.items), default=0)
+        self.input.setPlainText(self.drafts.pop(session_id, ""))
+        self.unread = 0
+        self._model_changed()
+        self.go_latest()
+        self.refresh_history()
+        self.status("")
+        self.input.setFocus()
 
     def source_language(self):
         return "yue" if self.direction_box.currentIndex() == 0 else "zh"
-
-    def direction_changed(self):
-        source = self.source_language()
-        self.source_header.setText(f"原文 / {NAMES[source]}")
-        self.target_header.setText(f"译文 / {NAMES['zh' if source == 'yue' else 'yue']}")
-
-    def swap(self):
-        if not self.pending and not self.listening:
-            self.direction_box.setCurrentIndex(1 - self.direction_box.currentIndex())
 
     def sensitivity_changed(self):
         selected = self.sensitivity_box.currentData()
@@ -639,146 +984,79 @@ class Window(QMainWindow):
                 self.sensitivity_box.findData(self.defaults.sensitivity)
             )
             self.sensitivity_box.blockSignals(False)
-            # QSettings buffers values even when sync fails. Restore the prior
-            # in-memory selection so a later flush does not silently switch it.
             self.preferences.setValue("defaults/sensitivity", self.defaults.sensitivity)
-            self.status("无法保存收音灵敏度，已保留原档位；请检查设置目录权限后重试。", True)
+            self.status("无法保存收音灵敏度，请检查设置目录权限。", True)
             return
         self.defaults = candidate
-        profile = voice_profile(selected)
-        self.sensitivity_hint.setText(profile.description)
-        self.status(f"收音灵敏度已保存为“{profile.label}”，下次开始收音时使用。")
+        self.sensitivity_box.setToolTip(voice_profile(selected).description)
 
     def source_changed(self):
-        if hasattr(self, "profile_box") and self.profile_box.currentIndex() == 1:
-            self.mode_hint.setText(
-                "pro：原文和粗译随说话更新，保留原段落断句；句末复核后修正并确认。"
-                + (
-                    "设备收音期间仅字幕。"
-                    if self.source_box.currentIndex() == 1
-                    else "句末确认后播报译音。"
-                )
-            )
-        elif self.source_box.currentIndex() == 1:
-            self.mode_hint.setText("设备声音：原文随听随更新，末尾仍可修订。收音期间仅字幕。")
-        else:
-            self.mode_hint.setText("边说边显示原文，末尾仍可修订。停顿后确认并播报。")
-        if self.cloud_enabled:
-            self.mode_hint.setText(
-                self.mode_hint.text()
-                + (
-                    " 本次任务已回退本地，不再上传；再次开始任务才尝试联网。"
-                    if self.network_mode == "fallback"
-                    else " 联网增强：pro 上传复核音频与待翻译文字（含粗译）；flash 仅上传待翻译文字。"
-                )
-            )
+        microphone = self.source_box.currentIndex() == 0
+        self.auto_box.setVisible(microphone)
+        self.caption_only_hint.setVisible(not microphone)
+        self.audio_button.setToolTip(
+            f"{self.source_box.currentText()} · {self.profile_box.currentText()}"
+        )
         self._buttons()
-
-    def show_composer(self, show):
-        self.composer.setVisible(show)
-        self.text_tab.setChecked(show)
-        self.live_tab.setChecked(not show)
-        self._update_empty()
-        if show:
-            self.input.setFocus()
+        self.reflow_workspace()
 
     def status(self, text, error=False):
         self.status_label.setText(text)
-        for label in (self.status_label, self.state_label):
-            label.setProperty("severity", "error" if error else "normal")
-            label.style().unpolish(label)
-            label.style().polish(label)
-        self._update_state()
+        self.status_label.setVisible(bool(text))
+        self.status_label.setToolTip("")
+        self.status_label.setProperty("severity", "error" if error else "normal")
+        self.status_label.style().unpolish(self.status_label)
+        self.status_label.style().polish(self.status_label)
 
-    def _update_state(self):
-        if self.closing:
-            text = "退出 / CLOSING"
-        elif self.listening:
-            text = "收音中 / LIVE"
-        elif self.pending:
-            text = "处理中 / BUSY"
-        elif self.status_label.property("severity") == "error":
-            text = "异常 / ERROR"
-        elif self.ready:
-            text = "就绪 / READY"
-        else:
-            text = "待机 / STANDBY"
-        self.state_label.setText(text)
-
-    def _update_empty(self):
-        if self.text_tab.isChecked():
-            self.empty.title.setText("从一句话开始")
-            self.empty.subtitle.setText("在下方输入短句，原文与译文将在这里配对显示。")
-            self.empty.steps.setText(
-                "输入 1–120 字  /  Ctrl + Enter 翻译"
-                if self.ready
-                else "先加载左侧离线模型，再输入短句。"
-            )
-        elif self.listening:
-            self.empty.title.setText("正在聆听")
-            self.empty.subtitle.setText("等待有效语音，识别结果将在这里显示。")
-            self.empty.steps.setText("再次点击收音按钮确认末尾  /  Esc 取消任务")
-        elif self.pending:
-            self.empty.title.setText("正在准备会话")
-            self.empty.subtitle.setText("任务处理中，请稍候。")
-            self.empty.steps.setText("Esc 可停止当前任务")
-        else:
-            self.empty.title.setText("语音通道已就绪" if self.ready else "等待接入语音")
-            self.empty.subtitle.setText("让语言相通，让交流继续。")
-            self.empty.steps.setText(
-                "点击左侧「开始收音」，或导入音频。"
-                if self.ready
-                else "01  选择音源与方向  /  02  加载模型  /  03  开始收音"
-            )
-
-    def _buttons(self):
-        if not hasattr(self, "load_button"):
+    def _buttons(self, *args):
+        if not hasattr(self, "stop_button"):
             return
-        idle = self.pending == 0 and not self.closing
-        self.load_button.setEnabled(idle and not self.ready)
-        self.load_button.setVisible(not self.ready)
-        self.record_button.setVisible(self.ready)
-        self.record_button.setEnabled(
-            not self.closing and (self.listening or (self.ready and idle))
-        )
+        idle = not self.pending and not self.listening and not self.closing
+        can_submit = self.can_start_task()
+        has_text = not self.input.document().isEmpty()
+        can_record = not self.closing and (self.listening or can_submit)
+        self.record_button.setEnabled(can_record)
         self.record_button.setText(
-            "停止收音"
+            "结束收音"
+            if self.capture_started
+            else "停止准备"
             if self.listening
             else "翻译设备声音"
             if self.source_box.currentIndex() == 1
             else "开始收音"
         )
-        self.stop_button.setEnabled(bool(self.pending or self.listening or self.player.busy))
-        for box in (self.direction_box, self.source_box, self.swap_button, self.profile_box):
-            box.setEnabled(idle and not self.listening)
-        self.profile_box.setEnabled(idle and not self.listening)
-        self.sensitivity_box.setEnabled(idle and not self.listening)
-        self.cloud_button.setEnabled(idle and not self.listening)
-        self.settings_button.setEnabled(idle and not self.listening)
-        for button in (self.translate_button, self.file_button):
-            button.setEnabled(self.ready and idle and not self.listening)
-        self.file_button.setText("打开音频")
-        self.auto_box.setEnabled(not (self.listening and self.source_box.currentIndex() == 1))
-        self.replay_button.setEnabled(
-            self.ready
-            and idle
-            and not self.listening
-            and any(e.target for e in self.selected_entries())
+        for button, primary in (
+            (self.record_button, self.listening or not has_text),
+            (self.translate_button, not self.listening and has_text),
+        ):
+            kind = "primary" if primary else "tool"
+            if button.objectName() != kind:
+                button.setObjectName(kind)
+                button.style().unpolish(button)
+                button.style().polish(button)
+        self.stop_button.setVisible(
+            not self.closing and bool(self.pending or self.listening or self.player.busy)
         )
-        self.clear_button.setEnabled(idle and not self.listening and bool(self.model.items))
+        for control in (self.direction_box, self.audio_button, self.file_button):
+            control.setEnabled(can_submit)
+        for control in (self.new_button, self.history_list):
+            control.setEnabled(idle)
+        self.settings_button.setEnabled(not self.closing)
+        self.preferences_action.setEnabled(idle)
+        self.cloud_action.setEnabled(idle)
+        self.input.setReadOnly(self.closing)
+        self.translate_button.setEnabled(can_submit and has_text)
+        self.replay_button.setEnabled(
+            can_submit
+            and bool(entries := self.selected_entries())
+            and bool(entries[-1].replay_text)
+        )
+        self.clear_button.setEnabled(idle and bool(self.model.items))
         self.copy_button.setEnabled(bool(self.model.items))
         self.export_button.setEnabled(bool(self.model.items))
-        self._update_state()
-        self._update_empty()
 
-    def load(self):
-        if self.ready or self.pending or self.closing:
-            return
-        self.cancel.clear()
-        self.pending += 1
-        self.jobs.put_nowait((self.epoch, 0, "load"))
-        self.status("正在加载并预热离线模型，首次可能需要几十秒…")
-        self._buttons()
+    def can_start_task(self):
+        return not self.listening and not self.closing and not self.pending
 
     def _change_transcript(self, callback, new=False):
         follow = self.view.follow_tail
@@ -794,8 +1072,14 @@ class Window(QMainWindow):
 
         QTimer.singleShot(0, settle)
 
+    def _queue_task(self, key, request):
+        token = object()
+        self.jobs.put_nowait((self.epoch, key, request, token))
+        self.playback_token = token
+        self.pending += 1
+
     def submit(self, request):
-        if not self.ready or self.closing:
+        if self.closing:
             return False
         if self.listening and self.source_box.currentIndex() == 1:
             if request.kind == "speak":
@@ -804,12 +1088,11 @@ class Window(QMainWindow):
         self.sequence += 1
         key = self.sequence
         try:
-            self.jobs.put_nowait((self.epoch, key, request))
+            self._queue_task(key, request)
         except queue.Full:
             self.stop()
             self.status("待处理语句过多，已停止收音。请暂停来源后重试。", True)
             return False
-        self.pending += 1
         if request.kind != "speak":
             self.active_ids.add(key)
             target = "zh" if request.source == "yue" else "yue"
@@ -825,14 +1108,15 @@ class Window(QMainWindow):
         return True
 
     def translate_input(self):
-        if self.pending or self.listening:
+        if not self.can_start_task():
             return
         text = self.input.toPlainText().strip()
         if not text or len(text) > 120:
-            self.status("请输入 1–120 字的短句；字幕缓存可保留上万条记录。", True)
-            self.show_composer(True)
+            self.status("请输入 1–120 字。", True)
+            self.input.setFocus()
             return
         self.cancel.clear()
+        self.status("正在翻译…")
         if self.submit(
             Request(
                 self.epoch,
@@ -846,7 +1130,7 @@ class Window(QMainWindow):
             self.input.clear()
 
     def open_audio(self, path=None):
-        if self.pending or self.listening or not self.ready:
+        if not self.can_start_task():
             return
         song = self.profile_box.currentIndex() == 1
         if not path or isinstance(path, bool):
@@ -872,8 +1156,7 @@ class Window(QMainWindow):
                 self.song_keys.clear()
                 self.song_final_block = -1
                 self.song_session = task
-                self.pending += 1
-                self.jobs.put_nowait((self.epoch, 0, task))
+                self._queue_task(0, task)
                 self.status("正在准备歌曲文件处理…")
                 self._buttons()
                 return
@@ -897,40 +1180,48 @@ class Window(QMainWindow):
         return self.model.items[-1:]
 
     def replay(self):
-        if self.pending or self.listening or not self.ready:
+        if not self.can_start_task():
             return
         entries = self.selected_entries()
-        if entries and entries[-1].target:
-            item = entries[-1]
-            self.cancel.clear()
-            self.submit(
-                Request(
-                    self.epoch,
-                    "speak",
-                    source=item.target_language,
-                    text=item.target,
-                    number_mode=self.number_mode,
-                )
+        if not entries or not entries[-1].replay_text:
+            return
+        item = entries[-1]
+
+        self.cancel.clear()
+        self.submit(
+            Request(
+                self.epoch,
+                "speak",
+                source=item.target_language,
+                text=item.replay_text,
+                number_mode=self.number_mode,
             )
+        )
 
     def toggle_capture(self):
         if self.listening:
+            if not self.capture_started:
+                self.stop()
+                return
             if self.song_session is not None:
                 self.listening = False
+                self.capture_started = False
                 if self.microphone:
-                    self.microphone.stop()
-                    self.microphone = None
-                self.song_session.mailbox.finish()
-                self.status("已停止收音，正在确认末尾字幕；可点“停止”取消等待。")
+                    self.microphone.request_stop()
+                else:
+                    self.song_session.mailbox.finish()
+                self.status("正在确认末尾字幕…")
                 self._buttons()
             else:
                 self.stop()
             return
-        if not self.ready or self.pending or self.closing:
+        if not self.can_start_task():
             return
         self.cancel.clear()
         self.listening = True
-        epoch = self.epoch
+        self.capture_started = False
+        self.capture_waiting = False
+        self.capture_notice = ""
         source, auto, mode = self.source_language(), self.auto_box.isChecked(), self.number_mode
         self.player.stop()
         self.song_keys.clear()
@@ -951,10 +1242,9 @@ class Window(QMainWindow):
                 number_mode=mode,
                 cloud=self.cloud_config if self.cloud_enabled else None,
             )
-        self.pending += 1
-        self.jobs.put_nowait((epoch, 0, self.song_session))
+        self._queue_task(0, self.song_session)
         self.status(
-            "正在准备 pro 段落复核…"
+            "正在准备精细收音…"
             if isinstance(self.song_session, SongSession)
             else "正在启动 flash 实时字幕…"
         )
@@ -971,27 +1261,58 @@ class Window(QMainWindow):
         def error(message):
             self.events.put((epoch, 0, "capture_error", message))
 
+        def started(name):
+            self.events.put((epoch, 0, "capture_started", name))
+
+        saturated = False
+
+        def segment(window):
+            nonlocal saturated
+            if saturated:
+                return
+            try:
+                session.mailbox.put(window)
+            except SongOverload:
+                # The last window is already in the queue. Its end is the last
+                # input position available to the consumer.
+                saturated = True
+                message = f"待确认的字幕已满，接收到收音后 {window.end / RATE:.2f} 秒。此后的声音未纳入本次字幕。"
+                self.events.put((epoch, 0, "capture_interrupted", (session, message)))
+                capture.request_stop()
+
         if self.source_box.currentIndex() == 1:
-            self.microphone = SystemAudio(
-                session.mailbox.put,
+            capture = SystemAudio(
+                segment,
                 error,
-                lambda name: self.events.put((epoch, 0, "capture_started", name)),
+                started,
                 paragraph=True,
                 segmenter_factory=factory,
             )
         else:
-            self.microphone = Microphone(
-                session.mailbox.put,
+            capture = Microphone(
+                segment,
                 error,
                 paragraph=True,
                 segmenter_factory=factory,
+                started=started,
             )
-        self.microphone.start()
-        self.status(
-            "pro 已开始：轻量草稿实时显示，按原段落规则断句后复核…"
-            if isinstance(session, SongSession)
-            else "flash 已开始：原文随说话更新，译文随后显示…"
+            if session.autoplay and self.defaults.mute_mic_during_playback:
+                capture.playback_intervals = self.player.playback_intervals
+
+        def finished():
+            self.events.put((epoch, 0, "capture_finished", capture))
+            session.mailbox.finish()
+
+        capture.on_interrupted = lambda report: self.events.put(
+            (epoch, 0, "capture_interrupted", (session, report.message))
         )
+        capture.on_finished = finished
+        capture.on_waiting = lambda waiting: self.events.put(
+            (epoch, 0, "capture_waiting", (session, waiting))
+        )
+        self.microphone = capture
+        capture.start()
+        self.status("正在打开音源…")
 
     def _song_key(self, block):
         if block not in self.song_keys:
@@ -1005,13 +1326,29 @@ class Window(QMainWindow):
             self._change_transcript(lambda: self.model.append(entry), new=True)
         return self.song_keys[block]
 
+    def _save_capture_notice(self):
+        if self.capture_notice:
+            self.sequence += 1
+            entry = TranscriptEntry(
+                self.sequence, "", "", source=self.capture_notice, status="收音中断"
+            )
+            self._change_transcript(lambda: self.model.append(entry), new=True)
+            self.capture_notice = ""
+
     def stop(self):
         self.cancel.set()
-        self.epoch += 1
+        self.playback_token = None
+        self.capture_waiting = False
         self.listening = False
+        self.capture_started = False
         if self.microphone:
             self.microphone.stop()
             self.microphone = None
+        # Commit results published before this cutoff, including any interruption
+        # reported as the capture owner exits. Do not start another device or job.
+        self._consume_events(self.events.qsize(), stopping=True)
+        self.epoch += 1
+        self._save_capture_notice()
         if self.song_session is not None:
             if isinstance(self.song_session, (SongSession, LiveSession)):
                 self.song_session.mailbox.finish()
@@ -1026,7 +1363,7 @@ class Window(QMainWindow):
                 break
         for key in tuple(self.active_ids):
             item = self.model.by_key.get(key)
-            if item and item.status != "已确认":
+            if item and item.status not in {"已确认", "已翻译"}:
                 self.model.update_entry(
                     key, status="已取消" if not item.target else "暂定 · 已停止"
                 )
@@ -1043,28 +1380,34 @@ class Window(QMainWindow):
         while True:
             job = self.jobs.get()
             if job is None:
-                self.jobs.task_done()
+                try:
+                    self.engine.close()
+                finally:
+                    self.jobs.task_done()
                 return
-            epoch, key, payload = job
+            epoch, key, payload, token = job
 
             def emit(kind, value, epoch=epoch, key=key):
                 self.events.put((epoch, key, kind, value))
 
             try:
-                if payload == "load":
-                    self.engine.load(self.cancel, lambda message: emit("status", message))
-                    emit("ready", True)
-                elif isinstance(payload, (SongSession, LiveSession)):
-                    payload.run(self.engine, self.player, self.cancel, emit)
+                output = self.player.for_task(
+                    lambda message, token=token, emit=emit: emit("audio_error", (token, message))
+                )
+                if isinstance(payload, (SongSession, LiveSession)):
+                    if not isinstance(payload, SongFile):
+                        emit("status", "正在准备语音识别…")
+                        self.engine.prepare_recognition(self.cancel)
+                    payload.run(self.engine, output, self.cancel, emit)
                 elif self.cloud_enabled and payload.kind in {"text", "file"}:
                     from .enhanced_inference import process_short_request
 
                     process_short_request(
-                        payload, self.cloud_config, self.engine, self.player, self.cancel, emit
+                        payload, self.cloud_config, self.engine, output, self.cancel, emit
                     )
                     emit("done", True)
                 else:
-                    self.engine.process(payload, self.cancel, self.player, emit)
+                    self.engine.process(payload, self.cancel, output, emit)
                     emit("done", True)
             except (Cancelled, InferenceCancelled):
                 pass
@@ -1076,25 +1419,48 @@ class Window(QMainWindow):
                 self.events.put((epoch, key, "finished", None))
                 self.jobs.task_done()
 
-    def poll(self):
-        for _ in range(160):
+    def _consume_events(self, limit, *, stopping=False):
+        for _ in range(limit):
             try:
                 epoch, key, kind, value = self.events.get_nowait()
             except queue.Empty:
                 break
             if kind == "finished":
                 self.pending = max(0, self.pending - 1)
-                self.active_ids.discard(key)
+                if not stopping and epoch == self.epoch:
+                    self.active_ids.discard(key)
                 continue
             if epoch != self.epoch:
                 continue
-            if kind == "ready":
-                self.ready = True
-                self.status(
-                    "本地模型已就绪，选择音源后即可开始。"
-                    + ("联网增强将在开始处理时请求云端。" if self.cloud_enabled else "")
+            if stopping and kind not in {
+                "source",
+                "translation",
+                "live_source",
+                "live_translation",
+                "live_empty",
+                "song_source",
+                "song_translation",
+                "song_empty",
+                "capture_interrupted",
+            }:
+                continue
+            if (
+                kind in {"translation", "song_translation", "live_translation"}
+                and self.engine.translator.using_completion
+                and self.network_mode in {"offline", "fallback"}
+            ):
+                detail = (
+                    "系统限制了本机服务连接。Hy-MT2 正通过离线程序逐次翻译，每句需要重新加载模型。"
                 )
-            elif kind == "network_state":
+                self.network_pill.setText(
+                    "本地回退 · 逐句翻译" if self.network_mode == "fallback" else "本地逐句翻译"
+                )
+                note = self.network_pill.toolTip()
+                if detail not in note:
+                    self.network_pill.setToolTip(
+                        note + "\n" + detail if self.network_mode == "fallback" else detail
+                    )
+            if kind == "network_state":
                 mode = value["mode"]
                 self.network_mode = mode
                 self.source_changed()
@@ -1126,6 +1492,7 @@ class Window(QMainWindow):
                         key,
                         target=value["text"],
                         target_confirmed=len(value["text"]),
+                        target_current=True,
                         status="已翻译",
                     )
                 )
@@ -1139,8 +1506,19 @@ class Window(QMainWindow):
                 self.status(value)
             elif kind == "first_audio":
                 self.status(f"译音已生成 · 本句用时 {value:.1f} 秒")
-            elif kind == "capture_started":
-                self.status(f"正在获取设备声音：{value}（仅字幕）")
+            elif kind == "capture_started" and self.listening:
+                self.capture_started = True
+                self.status(
+                    f"正在收音 · {value}"
+                    if self.source_box.currentIndex() == 0
+                    else f"正在翻译设备声音 · {value}（仅字幕）"
+                )
+            elif kind == "capture_waiting" and value[0] is self.song_session and self.listening:
+                self.capture_waiting = value[1]
+                if self.capture_waiting:
+                    self.status(WAITING_FOR_AUDIO)
+                elif self.status_label.text() == WAITING_FOR_AUDIO:
+                    self.status("已恢复接收音频。")
             elif kind == "song_ready":
                 self._start_song_capture()
             elif kind == "live_source":
@@ -1157,13 +1535,14 @@ class Window(QMainWindow):
                         if value["final"]
                         else "暂定 · 待复核"
                         if value.get("reviewing")
-                        else "亮色已固定 · 浅色暂定",
+                        else "末尾更新中",
                     )
                 )
                 self.status("原文已确认，正在翻译…" if value["final"] else "原文实时更新中…")
                 self.status_label.setToolTip(
-                    f"本次识别 {value['recognition_seconds']:.2f} 秒；"
-                    f"音频快照末尾至原文返回 {value['lag_seconds']:.2f} 秒，不含攒帧和本次绘制。"
+                    f"本次识别 {value['recognition_seconds']:.2f} 秒。"
+                    f"从窗口最后一包的采集回调到原文返回约 {value['lag_seconds']:.2f} 秒，"
+                    "含采集队列等待，不含设备内部延迟和界面绘制。"
                 )
             elif kind == "live_translation":
                 block = value["block"]
@@ -1190,6 +1569,11 @@ class Window(QMainWindow):
                             row_key,
                             target=value["text"],
                             target_confirmed=0,
+                            target_current=(
+                                value["version"] == current_version
+                                and value.get("source", item.source) == item.source
+                                and value.get("tail_current", True)
+                            ),
                             status="粗略译文 · 待复核",
                         )
                     )
@@ -1211,6 +1595,7 @@ class Window(QMainWindow):
                             row_key,
                             target=frozen_target,
                             target_confirmed=len(frozen_target),
+                            target_current=False,
                             status="前文已固定 · 末尾更新中",
                         )
                     )
@@ -1220,7 +1605,8 @@ class Window(QMainWindow):
                         row_key,
                         target=value["text"],
                         target_confirmed=len(frozen_target),
-                        status="已确认" if value["final"] else "亮色已固定 · 浅色暂定",
+                        target_current=value["final"] or value.get("tail_current", True),
+                        status="已确认" if value["final"] else "末尾更新中",
                     )
                 )
                 if value["final"]:
@@ -1245,7 +1631,7 @@ class Window(QMainWindow):
                 fields = dict(
                     source=value["text"],
                     source_confirmed=value.get("frozen_characters", 0),
-                    status="片段固定 · 翻译中" if value["final"] else "亮色已固定 · 浅色暂定",
+                    status="片段固定 · 翻译中" if value["final"] else "末尾更新中",
                 )
                 self._change_transcript(lambda: self.model.update_entry(row_key, **fields))
             elif kind == "song_translation":
@@ -1257,10 +1643,11 @@ class Window(QMainWindow):
                         row_key,
                         target=value["text"],
                         target_confirmed=len(value.get("frozen_target", "")),
+                        target_current=True,
                         status=(
                             "已确认"
                             if value["final"]
-                            else "亮色已固定 · 浅色暂定"
+                            else "末尾更新中"
                             if value.get("frozen_characters", 0)
                             else "暂定 · 待复核"
                         ),
@@ -1289,6 +1676,7 @@ class Window(QMainWindow):
                         target=value.get("target", ""),
                         source_confirmed=len(value.get("source", "")),
                         target_confirmed=len(value.get("target", "")),
+                        target_current=True,
                         status="前文已固定 · 末尾未确认"
                         if value.get("partial")
                         else "未检测到新内容",
@@ -1297,14 +1685,53 @@ class Window(QMainWindow):
                     self.song_keys.pop(value["block"], None)
             elif kind == "song_drained":
                 self.song_session = None
-                self.status(
-                    "已有字幕已保留，部分末尾没有有效识别结果，尚未确认。"
-                    if isinstance(value, dict) and value.get("partial_count")
-                    else "本次没有生成有效字幕，已有记录已保留。"
-                    if isinstance(value, dict) and not value.get("confirmed_count")
-                    else "末尾字幕已确认 · 本次记录已保留，可回看或导出。"
-                )
-            elif kind in ("capture_error", "audio_error"):
+                if self.capture_notice:
+                    for row_key in self.song_keys.values():
+                        if row_key in self.active_ids and self.model.by_key.get(row_key):
+                            self.model.update_entry(row_key, status="末尾未确认 · 收音已停止")
+                        self.active_ids.discard(row_key)
+                    self.song_keys.clear()
+                    self.status("已处理排队音频，字幕和收音中断位置已记入会话。")
+                    self._save_capture_notice()
+                else:
+                    self.status(
+                        "已有字幕已保留，部分末尾没有有效识别结果，尚未确认。"
+                        if isinstance(value, dict) and value.get("partial_count")
+                        else "本次没有生成有效字幕，已有记录已保留。"
+                        if isinstance(value, dict) and not value.get("confirmed_count")
+                        else "末尾字幕已确认 · 本次记录已保留，可回看或导出。"
+                    )
+            elif kind == "capture_interrupted" and value[0] is self.song_session:
+                self.capture_notice = self.capture_notice or value[1]
+                self.listening = False
+                self.capture_started = False
+            elif kind == "capture_finished" and value is self.microphone:
+                self.microphone = None
+                self.listening = self.capture_started = False
+                self.capture_waiting = False
+                report = getattr(value, "report", None)
+                if report is not None:
+                    muted = (
+                        f"播报期间跳过拾音 {report.muted_frames / report.rate:.3f} 秒。"
+                        if report.muted_frames
+                        else ""
+                    )
+                    self.record_button.setToolTip(
+                        f"上次收音收到 {report.frames / report.rate:.2f} 秒音频。"
+                        f"采集缓冲峰值 {report.peak_buffer_frames / report.rate:.3f} 秒，"
+                        f"接收队列峰值 {report.peak_receiver_packets} 包。"
+                        f"从采集回调到处理的最长等待为 {report.max_delivery_lag_seconds:.3f} 秒。"
+                        + muted
+                    )
+            elif kind in ("speech_warning", "audio_error"):
+                if kind == "audio_error":
+                    token, value = value
+                    if token is not self.playback_token:
+                        continue
+                if self.song_session is not None:
+                    self.song_session.autoplay = False
+                self.status(value, True)
+            elif kind == "capture_error":
                 self.stop()
                 self.status(value, True)
             elif kind == "error":
@@ -1312,6 +1739,18 @@ class Window(QMainWindow):
                     self.stop()
                 self.model.update_entry(key, status="处理失败")
                 self.status(value, True)
+
+    def poll(self):
+        self._consume_events(160)
+        if (
+            self.capture_waiting
+            and self.listening
+            and self.status_label.text() != WAITING_FOR_AUDIO
+        ):
+            self.status(WAITING_FOR_AUDIO)
+        if self.capture_notice and self.status_label.toolTip() != self.capture_notice:
+            self.status("收音已停止，正在补完已接收的字幕…")
+            self.status_label.setToolTip(self.capture_notice)
         self._buttons()
         if self.closing and not self.worker.is_alive():
             self.timer.stop()
@@ -1343,7 +1782,7 @@ class Window(QMainWindow):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "导出本次字幕",
-            str(export_directory(self.defaults) / "粤普随译-字幕.txt"),
+            str(export_directory(self.defaults) / f"{APP_NAME}-字幕.txt"),
             "文本文件 (*.txt)",
         )
         if path:
@@ -1357,36 +1796,42 @@ class Window(QMainWindow):
         path.write_text(self.model.export_text(), encoding="utf-8-sig")
 
     def clear_records(self):
-        if self.pending or self.listening:
+        if self.pending or self.listening or self.closing:
             return
         if (
             QMessageBox.question(
                 self,
                 "清空本次字幕",
-                "清空后无法恢复。需要保留时请先导出。是否清空？",
+                "这次会话的字幕将从本地历史中移除。需要保留时请先导出。确定清空？",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
             == QMessageBox.Yes
         ):
-            self.model.clear()
-            self.delegate.cache.clear()
-            self.delegate.heights.clear()
-            self.unread = 0
-            self.view.follow_tail = True
-            self.position_changed()
+            try:
+                self.history.delete(self.session_id)
+            except SessionHistoryError as exc:
+                self.status(str(exc), True)
+                return
+            self.history_timer.stop()
+            self.history_dirty = False
+            self.switch_session(self.session_id, [])
 
-    def apply_preferences(self):
+    def apply_preferences(self, previous=None):
         self.sensitivity_box.blockSignals(True)
         self.sensitivity_box.setCurrentIndex(
             self.sensitivity_box.findData(self.defaults.sensitivity)
         )
         self.sensitivity_box.blockSignals(False)
-        self.sensitivity_hint.setText(voice_profile(self.defaults.sensitivity).description)
-        self.profile_box.setCurrentIndex(1 if self.defaults.mode == "pro" else 0)
-        self.direction_box.setCurrentIndex(0 if self.defaults.direction == "yue" else 1)
-        self.source_box.setCurrentIndex(0 if self.defaults.audio_source == "microphone" else 1)
-        self.auto_box.setChecked(self.defaults.autoplay)
+        self.sensitivity_box.setToolTip(voice_profile(self.defaults.sensitivity).description)
+        if previous is None or self.defaults.mode != previous.mode:
+            self.profile_box.setCurrentIndex(1 if self.defaults.mode == "pro" else 0)
+        if previous is None or self.defaults.direction != previous.direction:
+            self.direction_box.setCurrentIndex(0 if self.defaults.direction == "yue" else 1)
+        if previous is None or self.defaults.audio_source != previous.audio_source:
+            self.source_box.setCurrentIndex(0 if self.defaults.audio_source == "microphone" else 1)
+        if previous is None or self.defaults.autoplay != previous.autoplay:
+            self.auto_box.setChecked(self.defaults.autoplay)
         self.delegate.font_size = self.defaults.font_size
         self.delegate.cache.clear()
         self.delegate.heights.clear()
@@ -1404,9 +1849,10 @@ class Window(QMainWindow):
             return
         dialog = SettingsDialog(self.defaults, self.preferences, self)
         if dialog.exec() == QDialog.Accepted:
+            previous = self.defaults
             self.defaults = dialog.preferences
-            self.apply_preferences()
-            self.status("首选项已保存，已应用默认模式、收音灵敏度、阅读与文件位置设置。")
+            self.apply_preferences(previous)
+            self.status("首选项已保存。")
 
     def cloud_settings(self):
         if self.pending or self.listening or self.closing:
@@ -1440,14 +1886,26 @@ class Window(QMainWindow):
         if self.closing:
             return
         self.stop()
+        if not self.save_history() and (
+            QMessageBox.question(
+                self,
+                "会话未保存",
+                "最近的字幕未能写入历史。选择「否」返回窗口导出。仍要退出吗？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            != QMessageBox.Yes
+        ):
+            return
         self.closing = True
-        self.status("正在停止并释放模型…未导出的本次字幕将在退出后释放。")
+        self.status("正在退出…")
         self.jobs.put_nowait(None)
         self._buttons()
 
 
 def main(*, muted=False):
     app = QApplication([])
+    app.setApplicationDisplayName(APP_NAME)
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
     window = Window(muted=muted)

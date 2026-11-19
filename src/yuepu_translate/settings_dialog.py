@@ -1,5 +1,6 @@
 """Validated user preferences; saving never records audio or upload consent."""
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -7,10 +8,12 @@ from PySide6.QtWidgets import (
     QDialogButtonBox,
     QFileDialog,
     QFormLayout,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QTabWidget,
     QVBoxLayout,
@@ -25,22 +28,46 @@ from .preferences import Preferences, default_cache_directory, export_directory,
 class SettingsDialog(QDialog):
     def __init__(self, preferences, settings, parent=None):
         super().__init__(parent)
-        self.setWindowTitle("设置与首选项")
-        self.setMinimumWidth(620)
-        self.setMinimumHeight(640)
+        self.setObjectName("settingsDialog")
+        self.setWindowTitle("首选项")
+        self.setMinimumSize(550, 400)
+        self.resize(660, 560)
         self.settings_store = settings
         self.preferences = preferences
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 24, 24, 24)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QVBoxLayout()
+        header.setContentsMargins(26, 20, 26, 14)
+        header.setSpacing(4)
+        header.addWidget(self._label("首选项", "dialogTitle"))
+        header.addWidget(self._label("为后续会话设置默认值。", "dialogDescription"))
+        layout.addLayout(header)
+
         self.tabs = QTabWidget()
-        layout.addWidget(self.tabs)
+        self.tabs.setObjectName("dialogNavigation")
+        self.tabs.setAccessibleName("首选项分类")
+        body = QVBoxLayout()
+        body.setContentsMargins(26, 0, 26, 12)
+        body.addWidget(self.tabs)
+        layout.addLayout(body, 1)
 
         def page(title):
+            scroll = QScrollArea()
+            scroll.setObjectName("dialogScroll")
+            scroll.setFrameShape(QFrame.NoFrame)
+            scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            scroll.setWidgetResizable(True)
             widget = QWidget()
+            scroll.setWidget(widget)
             form = QFormLayout(widget)
-            form.setContentsMargins(18, 20, 18, 20)
-            form.setSpacing(14)
-            self.tabs.addTab(widget, title)
+            form.setContentsMargins(0, 16, 10, 4)
+            form.setLabelAlignment(Qt.AlignLeft)
+            form.setFieldGrowthPolicy(QFormLayout.AllNonFixedFieldsGrow)
+            form.setHorizontalSpacing(20)
+            form.setVerticalSpacing(9)
+            self.tabs.addTab(scroll, title)
             return form
 
         def combo(form, label, name, options, value):
@@ -54,12 +81,13 @@ class SettingsDialog(QDialog):
             return field
 
         general = page("常规")
+        general.addRow(self._label("翻译", "dialogSection"))
         self.mode = combo(
             general,
             "默认模式",
             "default_mode",
             [
-                ("pro · 段落断句，实时草稿与句末复核", "pro"),
+                ("pro · 句末复核", "pro"),
                 ("flash · 轻量实时字幕", "flash"),
             ],
             preferences.mode,
@@ -74,6 +102,7 @@ class SettingsDialog(QDialog):
             ],
             preferences.direction,
         )
+        general.addRow(self._label("收音与播报", "dialogSection"))
         self.audio_source = combo(
             general,
             "默认音源",
@@ -91,8 +120,7 @@ class SettingsDialog(QDialog):
             [(profile.label, key) for key, profile in VOICE_PROFILES.items()],
             preferences.sensitivity,
         )
-        sensitivity_hint = QLabel()
-        sensitivity_hint.setWordWrap(True)
+        sensitivity_hint = self._label("", "dialogHint")
 
         def describe_sensitivity():
             profile = VOICE_PROFILES[self.sensitivity.currentData()]
@@ -103,17 +131,24 @@ class SettingsDialog(QDialog):
         self.sensitivity.currentIndexChanged.connect(describe_sensitivity)
         describe_sensitivity()
         general.addRow(sensitivity_hint)
-        self.autoplay = QCheckBox("确认后自动播报译音（设备收音期间始终关闭）")
+        self.autoplay = QCheckBox("确认后自动播报译音")
         self.autoplay.setChecked(preferences.autoplay)
-        general.addRow(self.autoplay)
-        note = QLabel(
-            "pro 保留原段落检测与断句，原文和粗译先显示，句末由较大模型复核并修正；需要 song-asr-large。\n"
-            "flash 保留轻量实时处理。联网增强由“联网设置”独立开启，重启后默认关闭。"
+        playback = QHBoxLayout()
+        playback.setContentsMargins(0, 0, 0, 0)
+        playback.setSpacing(12)
+        playback.addWidget(self.autoplay)
+        playback.addWidget(self._label("设备收音期间只显示字幕。", "dialogHint"), 1)
+        general.addRow(playback)
+        self.mute_mic_during_playback = QCheckBox("使用扬声器时，播报译音期间暂停拾音")
+        self.mute_mic_during_playback.setChecked(preferences.mute_mic_during_playback)
+        general.addRow(self.mute_mic_during_playback)
+        general.addRow(
+            self._label("仅对麦克风自动播报生效。播报期间对方同时说的话也会跳过。", "dialogHint")
         )
-        note.setWordWrap(True)
-        general.addRow(note)
+        self.mode.setToolTip("pro 先显示原文和粗译，句末复核时使用 song-asr-large 模型。")
 
         reading = page("阅读与播报")
+        reading.addRow(self._label("字幕", "dialogSection"))
         self.font_size = QSpinBox()
         self.font_size.setRange(12, 24)
         self.font_size.setValue(preferences.font_size)
@@ -122,6 +157,7 @@ class SettingsDialog(QDialog):
         self.smooth = QCheckBox("平滑滚动与字幕跟随动画")
         self.smooth.setChecked(preferences.smooth)
         reading.addRow(self.smooth)
+        reading.addRow(self._label("译音", "dialogSection"))
         self.numbers = combo(
             reading,
             "普通话数字读法",
@@ -133,24 +169,29 @@ class SettingsDialog(QDialog):
             ],
             preferences.number_mode,
         )
-        self.vocals = QCheckBox("人声分离（较慢，仅用于 pro 音频文件）")
+        reading.addRow(self._label("音频文件", "dialogSection"))
+        self.vocals = QCheckBox("启用人声分离")
         self.vocals.setChecked(preferences.vocals)
         reading.addRow(self.vocals)
+        reading.addRow(self._label("适用于 pro 模式的音频文件，会增加处理时间。", "dialogHint"))
 
         storage = page("文件位置")
+        storage.addRow(self._label("存储目录", "dialogSection"))
 
         def folder(label, name, value, placeholder):
             host = QWidget()
             row = QHBoxLayout(host)
             row.setContentsMargins(0, 0, 0, 0)
+            row.setSpacing(8)
             field = QLineEdit(value)
             field.setObjectName(name)
             field.setAccessibleName(label)
             field.setPlaceholderText(placeholder)
             field.setToolTip(value or placeholder)
-            field.textChanged.connect(field.setToolTip)
+            field.textChanged.connect(lambda path: field.setToolTip(path or placeholder))
             row.addWidget(field, 1)
             browse = QPushButton("浏览…")
+            browse.setAutoDefault(False)
             browse.setAccessibleName("选择" + label)
 
             def choose():
@@ -177,24 +218,49 @@ class SettingsDialog(QDialog):
             preferences.export_directory,
             str(export_directory(Preferences())),
         )
-        locations = QLabel(
-            "留空使用默认位置。缓存仅放本地推理临时文件，正常结束时清理。\n"
-            "字幕仅在手动导出时保存，不自动保存录音或会话。\n"
-            "更换目录不会搬动、删除旧文件，也不会移动已下载模型。\n"
-            f"当前模型目录：{DATA_DIR}"
+        storage.addRow(
+            self._label(
+                "留空使用默认位置。会话文字和字幕仍会自动保存在本机。",
+                "dialogHint",
+            )
         )
-        locations.setWordWrap(True)
-        storage.addRow(locations)
-        self.feedback = QLabel("保存后应用首选项；取消不会保存修改。")
-        self.feedback.setWordWrap(True)
+        storage.addRow(self._label("模型目录", "dialogSection"))
+        model_path = QLineEdit(str(DATA_DIR))
+        model_path.setAccessibleName("当前模型目录")
+        model_path.setReadOnly(True)
+        model_path.setToolTip(str(DATA_DIR))
+        storage.addRow(model_path)
+
+        footer = QWidget()
+        footer.setObjectName("dialogFooter")
+        actions = QVBoxLayout(footer)
+        actions.setContentsMargins(26, 12, 26, 14)
+        actions.setSpacing(8)
+        self.feedback = self._label("", "dialogError")
+        self.feedback.setProperty("severity", "error")
         self.feedback.setAccessibleName("设置保存结果")
-        layout.addWidget(self.feedback)
+        self.feedback.hide()
+        actions.addWidget(self.feedback)
         self.buttons = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        self.buttons.button(QDialogButtonBox.Save).setText("保存")
-        self.buttons.button(QDialogButtonBox.Cancel).setText("取消")
+        save = self.buttons.button(QDialogButtonBox.Save)
+        save.setText("保存")
+        save.setObjectName("primary")
+        save.setDefault(True)
+        cancel = self.buttons.button(QDialogButtonBox.Cancel)
+        cancel.setText("取消")
+        cancel.setObjectName("quiet")
         self.buttons.accepted.connect(self.accept)
         self.buttons.rejected.connect(self.reject)
-        layout.addWidget(self.buttons)
+        actions.addWidget(self.buttons)
+        layout.addWidget(footer)
+
+    @staticmethod
+    def _label(text, name):
+        label = QLabel(text)
+        label.setObjectName(name)
+        label.setTextFormat(Qt.PlainText)
+        label.setWordWrap(True)
+        return label
 
     def accept(self):
         candidate = Preferences(
@@ -203,6 +269,7 @@ class SettingsDialog(QDialog):
             audio_source=self.audio_source.currentData(),
             sensitivity=self.sensitivity.currentData(),
             autoplay=self.autoplay.isChecked(),
+            mute_mic_during_playback=self.mute_mic_during_playback.isChecked(),
             font_size=self.font_size.value(),
             smooth=self.smooth.isChecked(),
             number_mode=self.numbers.currentData(),
@@ -218,6 +285,7 @@ class SettingsDialog(QDialog):
                 if isinstance(exc, ValueError)
                 else "无法写入所选目录或保存设置，请检查权限后重试。"
             )
+            self.feedback.show()
             return
         self.preferences = candidate
         super().accept()

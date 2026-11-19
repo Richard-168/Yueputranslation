@@ -59,13 +59,9 @@ def verify(installation, evidence):
         window.translate_input()
         assert window.pending == 0 and "120" in window.status_label.text()
         result["oversized_text_rejected"] = True
-        print("Loading actual packaged models", flush=True)
-        started = time.monotonic()
-        window.load()
-        wait(lambda: window.pending == 0)
-        assert window.ready, window.status_label.text()
-        result["load_seconds"] = round(time.monotonic() - started, 3)
-        print("Models loaded", result["load_seconds"], flush=True)
+        assert window.engine.translator.child is None
+        assert window.engine.asr is window.engine.zh_tts is window.engine.yue_tts is None
+        first_translator = None
         for direction, source in (
             (1, "他今天没空，请明天再来。"),
             (0, "佢今日唔得閒，唔該聽日再嚟。"),
@@ -77,6 +73,10 @@ def verify(installation, evidence):
             window.translate_input()
             wait(lambda: window.pending == 0)
             row = window.model.items[-1]
+            if first_translator is None:
+                first_translator = window.engine.translator.child
+            assert first_translator is not None and first_translator.poll() is None
+            assert window.engine.translator.child is first_translator
             assert row.target and row.target_confirmed == len(row.target), (
                 window.status_label.text()
             )

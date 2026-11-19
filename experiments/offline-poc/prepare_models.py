@@ -224,7 +224,10 @@ def main():
         )
     total = sum(x["size"] for x in specs)
     if total > 4 * 2**30:
-        raise RuntimeError("Experiment download cap exceeded")
+        parser.error(
+            f"Requested assets total {total / 2**30:.2f} GiB, above the 4 GiB per-run limit. "
+            "Run the base components and song-asr-large separately as shown in README.md."
+        )
     print(
         f"Public model/runtime download plan: {len(specs)} files, {total / 2**30:.2f} GiB",
         flush=True,

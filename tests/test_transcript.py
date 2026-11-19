@@ -79,7 +79,9 @@ class TranscriptTests(unittest.TestCase):
     def test_export_retains_direction_and_incomplete_status(self):
         model = TranscriptModel()
         model.append(
-            TranscriptEntry(1, "yue", "zh", source="測試", target="测试", timestamp="12:34:56")
+            TranscriptEntry(
+                1, "yue", "zh", source="測試", target="测试", status="已翻译", timestamp="12:34:56"
+            )
         )
         model.append(TranscriptEntry(2, "zh", "yue", source="停止", status="已取消"))
         exported = model.export_text()
@@ -88,6 +90,24 @@ class TranscriptTests(unittest.TestCase):
         self.assertIn("[已取消]", exported)
         model.clear()
         self.assertEqual(model.export_text(), "")
+
+    def test_old_unversioned_partial_keeps_only_confirmed_prefix_in_paired_translation(self):
+        model = TranscriptModel()
+        model.append(
+            TranscriptEntry(
+                1,
+                "yue",
+                "zh",
+                source="新原文",
+                target="前文旧尾",
+                target_confirmed=2,
+                status="末尾更新中",
+            )
+        )
+        text = model.export_text()
+        self.assertIn("译文：前文 [仅已固定前文]", text)
+        self.assertIn("此前的译文草稿（与本版原文未核对）：前文旧尾", text)
+        self.assertIn("状态：末尾更新中", text)
 
 
 if __name__ == "__main__":

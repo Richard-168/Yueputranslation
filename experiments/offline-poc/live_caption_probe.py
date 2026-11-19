@@ -26,6 +26,7 @@ from yuepu_translate.desktop_engine import PlaybackProcessor, SpeechSegmenter
 from yuepu_translate.desktop_qt import STYLE, Window
 from yuepu_translate.desktop_theme import THEMES
 from yuepu_translate.local_inference import LocalInference
+from yuepu_translate.session_history import SessionHistory
 from yuepu_translate.song_pipeline import make_song_stream
 from yuepu_translate.transcript_model import TranscriptEntry
 
@@ -193,14 +194,13 @@ def main():
             raise RuntimeError("Chinese font is unavailable for offscreen rendering")
     app.setStyle("Fusion")
     app.setStyleSheet(STYLE)
-    window = Window(muted=True)
+    window = Window(muted=True, history=SessionHistory(args.output / "history.sqlite3"))
     window.engine.asr = model_runtime.recognizer()
     if args.speak and not args.device:
         if args.source == "yue":
             window.engine.zh_tts = model_runtime.mandarin_engine()
         else:
             window.engine.yue_tts = model_runtime.canto_engine()
-    window.ready = True
     window.direction_box.setCurrentIndex(0 if args.source == "yue" else 1)
     window.source_box.setCurrentIndex(int(args.device))
     window.profile_box.setCurrentIndex(int(args.profile == "pro"))
@@ -251,9 +251,9 @@ def main():
         )
         return text
 
-    def translate(model, text, cancel):
+    def translate(model, text, cancel, **kwargs):
         begin = time.perf_counter()
-        result = original_translate(model, text, cancel)
+        result = original_translate(model, text, cancel, **kwargs)
         inference_calls.append(
             dict(
                 kind="translation",
@@ -278,7 +278,7 @@ def main():
     window.engine.recognize = recognize
 
     class InjectedCapture:
-        def __init__(self, emit, error, ready=None, paragraph=False, segmenter_factory=None):
+        def __init__(self, emit, error, started=None, paragraph=False, segmenter_factory=None):
             self.stop_event = threading.Event()
             self.processor = PlaybackProcessor(
                 rate,
@@ -287,13 +287,13 @@ def main():
                 segmenter_factory=segmenter_factory or (make_song_stream if paragraph else None),
             )
             self.thread = None
-            self.ready, self.error = ready, error
+            self.started, self.error = started, error
 
         def start(self):
             def feed():
                 try:
-                    if self.ready:
-                        self.ready("本地 PCM 注入（非真实设备）")
+                    if self.started:
+                        self.started("本地 PCM 注入（非真实设备）")
                     timing["start"] = time.monotonic()
                     started.set()
                     size = max(1, round(rate * 0.032))
@@ -304,18 +304,24 @@ def main():
                         wait = timing["start"] + (offset + size) / rate - time.monotonic()
                         if wait > 0:
                             self.stop_event.wait(wait)
+                    feed_done.set()
+                    self.stop_event.wait()
                     self.processor.flush()
                 except Exception as exc:
                     capture_errors.append(str(exc))
                     self.error(str(exc))
                 finally:
                     feed_done.set()
+                    self.on_finished()
 
             self.thread = threading.Thread(target=feed, daemon=True)
             self.thread.start()
 
-        def stop(self):
+        def request_stop(self):
             self.stop_event.set()
+
+        def stop(self):
+            self.request_stop()
             if self.thread:
                 self.thread.join(4)
 

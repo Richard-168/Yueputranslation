@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from yuepu_translate import APP_NAME
 from yuepu_translate.paths import data_dir
 
 
@@ -16,7 +17,15 @@ class EntryTests(unittest.TestCase):
 
         native = types.ModuleType("sherpa_onnx")
         native.OfflineRecognizer = types.SimpleNamespace(from_wenet_ctc=Mock())
-        with patch.dict(sys.modules, {"sherpa_onnx": native}):
+        with (
+            tempfile.TemporaryDirectory() as folder,
+            patch.object(model_runtime, "MODELS", Path(folder)),
+            patch.dict(sys.modules, {"sherpa_onnx": native}),
+        ):
+            base = Path(folder) / "asr-wenet"
+            base.mkdir()
+            (base / "model.int8.onnx").touch()
+            (base / "tokens.txt").touch()
             for language in ("", "zh", "yue", "en"):
                 model_runtime.recognizer(language)
                 kwargs = native.OfflineRecognizer.from_wenet_ctc.call_args.kwargs
@@ -57,7 +66,7 @@ class EntryTests(unittest.TestCase):
                     timeout=15,
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
-                self.assertIn("粤普双向翻译", result.stdout)
+                self.assertIn(APP_NAME, result.stdout)
                 self.assertIn("生成译音但不播放", result.stdout)
 
     def test_chinese_argument_error_is_utf8_on_a_legacy_code_page(self):

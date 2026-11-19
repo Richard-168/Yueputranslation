@@ -25,6 +25,7 @@ internal class AudioCapture(
     private val cancelled: AtomicBoolean,
     private val emit: (AudioWindow) -> Unit,
     private val level: (Int) -> Unit,
+    private val started: () -> Unit,
     private val ended: () -> Unit,
     private val failed: (Exception) -> Unit,
     private val muted: () -> Boolean,
@@ -68,6 +69,7 @@ internal class AudioCapture(
             if (stopped.get() || cancelled.get()) return
             input.startRecording()
             check(input.recordingState == AudioRecord.RECORDSTATE_RECORDING) { "麦克风未能开始收音。" }
+            if (!stopped.get() && !cancelled.get()) started()
             val pcm = ShortArray(512)
             var lastLevel = 0L
             while (!stopped.get() && !cancelled.get()) {

@@ -7,7 +7,7 @@ import numpy as np
 
 from .audio_profile import DEFAULT_SENSITIVITY, voice_profile
 from .enhanced_inference import SessionInference
-from .inference_control import InferenceCancelled, check_cancel
+from .inference_control import InferenceCancelled, check_cancel, speak_translation
 from .paragraphs import ParagraphRevision, accept_punctuation
 from .song_stream import SongMailbox, SongWindow, draft_fits, trim_context
 from .translation_state import IncrementalTranslation
@@ -58,7 +58,7 @@ class SongSession:
         if source not in {"yue", "zh"}:
             raise ValueError("请选择粤语或普通话方向。")
         self.source, self.autoplay, self.number_mode = source, autoplay, number_mode
-        self.mailbox = SongMailbox()
+        self.mailbox = SongMailbox.for_capture()
         self.file_mode = False
         self.cloud_config = cloud
 
@@ -75,7 +75,7 @@ class SongSession:
 
         from .desktop_engine import UNSUPPORTED_SCRIPT, Cancelled
 
-        inference = SessionInference(self.source, self.cloud_config, emit)
+        inference = SessionInference(self.source, self.cloud_config, emit, engine=engine)
         previous = ""
         previous_end = -1
         states = {}
@@ -213,9 +213,11 @@ class SongSession:
                     if self.autoplay:
                         target = "zh" if self.source == "yue" else "yue"
                         for confirmed in state["translation"].speech:
-                            engine.speak(
-                                confirmed, target, self.number_mode, player, cancel, lambda: None
-                            )
+                            if not speak_translation(
+                                engine, confirmed, target, self.number_mode, player, cancel, emit
+                            ):
+                                self.autoplay = False
+                                break
                     states.pop(window.block, None)
             check_cancel(cancel)
             emit("song_drained", dict(confirmed_count=confirmed_count, partial_count=partial_count))

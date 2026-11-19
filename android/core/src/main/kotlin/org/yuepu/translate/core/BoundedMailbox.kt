@@ -1,6 +1,8 @@
 package org.yuepu.translate.core
 
-class BoundedMailbox<T : Any>(val maxFinals: Int = 3) {
+class MailboxBacklog : IllegalStateException("处理跟不上收音，请暂停后重试。")
+
+class BoundedMailbox<T : Any>(val maxFinals: Int = 3, private val stopAtLimit: Boolean = false) {
     private val monitor = Object()
     private val finals = ArrayDeque<T>()
     private var draft: T? = null
@@ -8,12 +10,22 @@ class BoundedMailbox<T : Any>(val maxFinals: Int = 3) {
 
     init { require(maxFinals > 0) }
 
-    fun put(value: T, confirmed: Boolean): Boolean = synchronized(monitor) {
-        if (finished) return false
+    fun put(value: T, confirmed: Boolean, cancelled: (() -> Boolean)? = null): Boolean = synchronized(monitor) {
+        if (finished || cancelled?.invoke() == true) return false
         if (confirmed) {
-            check(finals.size < maxFinals) { "处理跟不上收音，请暂停后重试。" }
+            while (finals.size >= maxFinals) {
+                if (cancelled == null) throw MailboxBacklog()
+                monitor.wait(50)
+                if (finished || cancelled()) return false
+            }
             finals.addLast(value)
             draft = null
+            if (stopAtLimit && finals.size == maxFinals) {
+                // Accept the last window before stopping capture. The consumer still drains the queue.
+                finished = true
+                monitor.notifyAll()
+                throw MailboxBacklog()
+            }
         } else draft = value
         monitor.notifyAll()
         true
@@ -29,7 +41,7 @@ class BoundedMailbox<T : Any>(val maxFinals: Int = 3) {
 
     fun take(cancelled: () -> Boolean): T? = synchronized(monitor) {
         while (!cancelled()) {
-            if (finals.isNotEmpty()) return finals.removeFirst()
+            if (finals.isNotEmpty()) return finals.removeFirst().also { monitor.notifyAll() }
             if (draft != null) return draft.also { draft = null }
             if (finished) return null
             monitor.wait(50)

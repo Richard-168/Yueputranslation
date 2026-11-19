@@ -1,6 +1,14 @@
 package org.yuepu.translate.core
 
-class TranscriptStore(val maxRows: Int = 200, val maxCharacters: Int = 200_000) {
+class TranscriptStore(
+    val maxRows: Int = DEFAULT_MAX_ROWS,
+    val maxCharacters: Int = DEFAULT_MAX_CHARACTERS,
+) {
+    companion object {
+        const val DEFAULT_MAX_ROWS = 200
+        const val DEFAULT_MAX_CHARACTERS = 200_000
+    }
+
     private val entries = linkedMapOf<Pair<Long, Long>, Caption>()
     private var epoch = 0L
     private var active = false
@@ -52,6 +60,27 @@ class TranscriptStore(val maxRows: Int = 200, val maxCharacters: Int = 200_000) 
     fun cancel() { active = false }
     fun snapshot(): List<Caption> = entries.values.toList()
     fun clear() { entries.clear(); characters = 0 }
+
+    /** Replace the visible rows without allowing queued work to edit restored history. */
+    fun restore(captions: List<Caption>) {
+        val restored = captions.associateByTo(linkedMapOf()) { it.epoch to it.block }
+        require(restored.size == captions.size) { "会话字幕包含重复记录。" }
+        require(captions.all { it.epoch in 0L until Long.MAX_VALUE }) { "会话字幕编号无效。" }
+        var total = captions.sumOf { it.source.length.toLong() + it.target.length }
+        val iterator = restored.entries.iterator()
+        while (restored.size > maxRows || total > maxCharacters) {
+            val removed = iterator.next().value
+            total -= removed.source.length.toLong() + removed.target.length
+            iterator.remove()
+        }
+
+        active = false
+        epoch = maxOf(epoch, captions.maxOfOrNull { it.epoch } ?: 0L)
+        removedThrough = -1L
+        entries.clear()
+        entries.putAll(restored)
+        characters = total.toInt()
+    }
 
     private fun prune() {
         while (entries.size > maxRows || characters > maxCharacters) {

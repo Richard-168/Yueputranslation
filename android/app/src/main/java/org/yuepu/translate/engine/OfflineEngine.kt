@@ -9,7 +9,6 @@ import org.yuepu.translate.core.Direction
 
 internal class OfflineEngine(private val root: File, private val context: Context) : AutoCloseable {
     private var recognizer: OfflineRecognizer? = null
-    private var recognitionDirection: Direction? = null
     private var mandarin: OfflineTts? = null
     private var cantonese: SystemCantoneseTts? = null
     @Volatile private var translator = 0L
@@ -23,13 +22,19 @@ internal class OfflineEngine(private val root: File, private val context: Contex
     fun load(direction: Direction, cancelled: AtomicBoolean, status: (String) -> Unit) {
         check(cancelled)
         status("正在加载离线识别…")
-        setDirection(direction)
+        recognizer = OfflineRecognizer(config = OfflineRecognizerConfig(
+            featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
+            modelConfig = OfflineModelConfig(
+                wenetCtc = OfflineWenetCtcModelConfig(model = path("asr/model.int8.onnx")),
+                tokens = path("asr/tokens.txt"), numThreads = 2, provider = "cpu",
+            ),
+        ))
         check(cancelled)
         status("正在加载本地翻译…")
         translator = NativeTranslator.create(path("translation/model.gguf"), 4)
         check(cancelled)
         status("正在预热本地翻译…")
-        NativeTranslator.translate(translator, "你好。", false)
+        NativeTranslator.translate(translator, "你好。", direction.target == "zh")
         check(cancelled)
         status("正在加载普通话译音…")
         mandarin = OfflineTts(config = OfflineTtsConfig(
@@ -44,22 +49,6 @@ internal class OfflineEngine(private val root: File, private val context: Contex
         cantonese = SystemCantoneseTts(context)
         checkNotNull(cantonese).load(cancelled)
         check(cancelled)
-    }
-
-    // Called only while idle, after previous capture and recognition threads joined.
-    fun setDirection(direction: Direction) {
-        if (recognitionDirection == direction && recognizer != null) return
-        recognizer?.release()
-        recognizer = null
-        recognitionDirection = null
-        recognizer = OfflineRecognizer(config = OfflineRecognizerConfig(
-            featConfig = FeatureConfig(sampleRate = 16000, featureDim = 80),
-            modelConfig = OfflineModelConfig(
-                wenetCtc = OfflineWenetCtcModelConfig(model = path("asr/model.int8.onnx")),
-                tokens = path("asr/tokens.txt"), numThreads = 2, provider = "cpu",
-            ),
-        ))
-        recognitionDirection = direction
     }
 
     fun recognize(samples: FloatArray, cancelled: AtomicBoolean): String {
@@ -115,7 +104,6 @@ internal class OfflineEngine(private val root: File, private val context: Contex
         cancel()
         // The controller joins all owners before calling this method.
         recognizer?.release(); recognizer = null
-        recognitionDirection = null
         mandarin?.release(); mandarin = null
         cantonese?.close(); cantonese = null
         if (translator != 0L) NativeTranslator.destroy(translator)
