@@ -35,7 +35,13 @@ offline = [
   "soxr==1.0.0",
   "PyAudioWPatch==0.2.12.8; sys_platform == 'win32'",
 ]
-dev = ["ruff==0.16.5", "build==1.6.0", "numpy==2.5.4"]
+dev = [
+  "ruff==0.16.5",
+  "build==1.6.0",
+  "numpy==2.5.4",
+  "soxr==1.0.0",
+  "canto-tts==0.1.4",
+]
 diagnostics = ["av==16.0.1", "psutil>=7,<8", "Pillow>=11,<13"]
 
 [project.scripts]
