@@ -1,5 +1,6 @@
 """Single owner of desktop defaults and configurable temporary/export directories."""
 
+import os
 import tempfile
 from dataclasses import dataclass, fields
 from pathlib import Path
@@ -71,7 +72,7 @@ def load_preferences(settings=None):
         elif field.name == "font_size":
             value = int(value)
         values[field.name] = value
-    if (DATA_DIR / MT_MODEL).is_file():
+    if (DATA_DIR / MT_MODEL).is_file() or os.environ.get("YUEPU_LIGHT_INSTALL") == "1":
         if not settings.contains("defaults/mode") and not all(
             (DATA_DIR / asset).is_file() for asset in (ASR_MODEL, ASR_PROJECTOR)
         ):

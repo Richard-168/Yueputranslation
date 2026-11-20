@@ -8,7 +8,13 @@ from pathlib import Path
 
 def main():
     root = Path(__file__).resolve().parent
-    os.environ.setdefault("YUEPU_DATA_DIR", str(root / "data"))
+    data = root / "data"
+    os.environ["YUEPU_RUNTIME_DATA_DIR"] = str(data)
+    if (root / "light-install.flag").is_file():
+        os.environ["YUEPU_LIGHT_INSTALL"] = "1"
+    else:
+        os.environ.setdefault("YUEPU_DATA_DIR", str(data))
+        os.environ["YUEPU_BUNDLED_DATA_DIR"] = str(data)
     os.environ["PYTHONDONTWRITEBYTECODE"] = "1"
     # GUI launches through pythonw; owned capture/cloud helpers need normal
     # standard streams and are already created with CREATE_NO_WINDOW.

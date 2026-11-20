@@ -19,6 +19,7 @@ models/
 runtime/
 downloads/
 outputs/
+.yuepu-models.lock
 /YuePuTranslate/cache/
 *.onnx
 *.gguf

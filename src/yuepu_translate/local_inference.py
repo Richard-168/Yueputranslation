@@ -5,6 +5,7 @@ import base64
 import errno
 import io
 import json
+import os
 import secrets
 import socket
 import subprocess
@@ -63,9 +64,18 @@ class LocalInference:
         self.key = secrets.token_urlsafe(24)
         self.opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
 
+    def runtime_path(self, relative):
+        path = self.root / relative
+        bundled = os.environ.get("YUEPU_RUNTIME_DATA_DIR")
+        if self.root == DATA_DIR and bundled and not path.is_file():
+            return Path(bundled) / relative
+        return path
+
     def check_files(self):
-        required = [SERVER, ASR_MODEL, ASR_PROJECTOR] if self.role == "asr" else [SERVER, MT_MODEL]
-        if any(not (self.root / path).is_file() for path in required):
+        required = [ASR_MODEL, ASR_PROJECTOR] if self.role == "asr" else [MT_MODEL]
+        if not self.runtime_path(SERVER).is_file() or any(
+            not (self.root / path).is_file() for path in required
+        ):
             raise RuntimeError(
                 "pro 段落模型不完整，请准备 song-asr-large 和本地推理程序；也可选择 flash。"
                 if self.role == "asr"
@@ -88,7 +98,7 @@ class LocalInference:
             raise RuntimeError("无法为本机推理服务分配端口，请稍后重试。") from exc
         model = ASR_MODEL if self.role == "asr" else MT_MODEL
         command = [
-            str(self.root / SERVER),
+            str(self.runtime_path(SERVER)),
             "-m",
             str(self.root / model),
             "--host",
@@ -295,7 +305,7 @@ class LocalInference:
                     self.start(cancel)
                     return self._generate(prompt, cancel)
                 except LoopbackDenied:
-                    if not (self.root / COMPLETION).is_file():
+                    if not self.runtime_path(COMPLETION).is_file():
                         raise
                     self.using_completion = True
             return self._complete_without_socket(prompt, cancel)
@@ -333,7 +343,7 @@ class LocalInference:
             prompt_path = Path(directory) / "prompt.txt"
             prompt_path.write_text(prompt, encoding="utf-8")
             command = [
-                str(self.root / COMPLETION),
+                str(self.runtime_path(COMPLETION)),
                 "-m",
                 str(self.root / MT_MODEL),
                 "--offline",

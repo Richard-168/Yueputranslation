@@ -1,4 +1,25 @@
-# 粤普同传 Windows 本地安装包
+# 粤普同传 Windows 安装包
+
+日常分发优先使用轻量版。它随包提供应用、私有 Python 和本地推理运行程序。首次打开可在「模型管理」下载或导入基础模型，pro 复核和文件人声分离按需获取。模型保存在 `%LOCALAPPDATA%\YuePuTranslate\models`，同一轻量版安装升级会继续使用已有模型。显式设置 `YUEPU_DATA_DIR` 时使用指定目录。
+
+从仓库根目录，在装有 `[offline]` 依赖的 Windows x64 Python 3.12 环境执行。暂存目录必须是新目录，`--data` 所指目录只需准备 llama.cpp 运行程序。
+
+```powershell
+python installer/windows/payload.py --profile light --output outputs/windows-installer/payload-light
+& 'D:\Applications\Inno Setup 6\ISCC.exe' /DLightInstaller installer/windows/YuePuTranslate.iss
+```
+
+安装 EXE 位于 `outputs/windows-installer/release-light/`。轻量版和完整离线版登记为不同应用，可以分别安装。已有完整离线版的模型可以按组导出 ZIP 后导入轻量版。
+
+```powershell
+$env:YUEPU_DATA_DIR = '<完整离线版安装目录>\data'
+& '<完整离线版安装目录>\python\python.exe' -I -B -m yuepu_translate.model_worker export base '<输出目录>\base.zip'
+Remove-Item Env:YUEPU_DATA_DIR
+```
+
+也可把 `base` 换成 `pro` 或 `vocals`。在目标设备打开「设置 → 模型管理」，选中对应组并导入 ZIP。应用会逐文件校验固定版本和 SHA-256。传输中止后再次点击「下载或修复」可尝试续传。
+
+## 完整离线版
 
 有完整安装程序和分卷时，可在干净的一次性 Windows x64 虚拟机中运行 `.\installer\windows\verify_install_in_vm.ps1 -Installer <安装程序路径> -Evidence <日志目录> -DisposableVM`。此检查使用独立安装目录，核对当前用户的卸载登记、开始菜单快捷方式和随包运行环境，最后实际执行卸载并保留日志。
 

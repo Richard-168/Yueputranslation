@@ -20,6 +20,8 @@ def bundle(directory, output, payload, *, private_development=False):
     if output.exists() or not output.is_relative_to(ROOT / "outputs"):
         raise ValueError("Use a new ZIP path inside the project's outputs directory")
     manifest = json.loads((payload / "payload-manifest.json").read_text(encoding="utf-8"))
+    if manifest.get("profile", "full") != "full":
+        raise ValueError("Use the standalone setup EXE for the light installer")
     model_licenses = verify_payload(
         manifest, "windows", MODEL_DIRS, private_development=private_development
     )
@@ -30,7 +32,7 @@ def bundle(directory, output, payload, *, private_development=False):
         if source.stat().st_size != record["size"] or sha256(source) != record["sha256"]:
             raise ValueError("Payload changed after its accepted snapshot: " + name)
     settings = (ROOT / "installer/windows/YuePuTranslate.iss").read_text(encoding="utf-8")
-    name = re.search(r"^OutputBaseFilename=(.+)$", settings, re.MULTILINE).group(1).strip()
+    name = re.findall(r"^OutputBaseFilename=(.+)$", settings, re.MULTILINE)[-1].strip()
     executable = directory / (name + ".exe")
     with executable.open("rb") as stream:
         if stream.read(2) != b"MZ":

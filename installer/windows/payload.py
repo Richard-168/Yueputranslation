@@ -123,8 +123,13 @@ def sha256(path):
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
-def write_file_list(output, names):
-    lines = []
+def write_file_list(output, names, *, light=False):
+    condition = "ifndef" if light else "ifdef"
+    lines = [
+        f"#{condition} LightInstaller",
+        '#error "Payload profile does not match the LightInstaller compiler option"',
+        "#endif",
+    ]
     for name in sorted(set(names)):
         path = record_path(output, name)
         if path is None or not path.is_file():
@@ -143,7 +148,9 @@ def apply_runtime_patches(output):
     return [patch_host(output / "python" / name) for name in ("python.exe", "pythonw.exe")]
 
 
-def build(output, data, *, private_development=False):
+def build(output, data, *, private_development=False, profile="full"):
+    if profile not in {"light", "full"}:
+        raise ValueError("Unknown Windows installer profile")
     model_licenses = review("windows", MODEL_DIRS, private_development=private_development)
     if sys.version_info[:2] != (3, 12) or struct.calcsize("P") != 8 or sys.platform != "win32":
         raise ValueError("Build with the tested Windows x64 Python 3.12 environment")
@@ -240,14 +247,17 @@ def build(output, data, *, private_development=False):
                 archive.write(path, relative.as_posix())
     tree(ROOT / "src/yuepu_translate", "app/yuepu_translate", lambda p: p.suffix in {".py", ".svg"})
     copy(ROOT / "installer/windows/launcher.py", "launch.py")
-    for name in MODEL_DIRS:
-        print("Collecting model", name, flush=True)
-        verify_artifacts(model_licenses["models"][name], data / "models" / name)
-        tree(
-            data / "models" / name,
-            Path("data/models") / name,
-            lambda p: p.suffix.lower() not in {".wav", ".mp3", ".mp4", ".flac", ".log"},
-        )
+    if profile == "full":
+        for name in MODEL_DIRS:
+            print("Collecting model", name, flush=True)
+            verify_artifacts(model_licenses["models"][name], data / "models" / name)
+            tree(
+                data / "models" / name,
+                Path("data/models") / name,
+                lambda p: (
+                    p.suffix.lower() not in {".wav", ".mp3", ".mp4", ".flac", ".log", ".part"}
+                ),
+            )
     runtime = data / "runtime/llama-b12314"
     tree(
         runtime,
@@ -268,7 +278,12 @@ def build(output, data, *, private_development=False):
     copy(ROOT / "installer/windows/使用说明.txt", "使用说明.txt")
     # Record generated runtime files and an exact allowlist; no user's settings,
     # secrets, recordings, exports, Android data or development cache are copied.
-    for path in (library, output / "python/python312._pth"):
+    generated = [library, output / "python/python312._pth"]
+    if profile == "light":
+        flag = output / "light-install.flag"
+        flag.write_text("light\n", encoding="ascii")
+        generated.append(flag)
+    for path in generated:
         files[path.relative_to(output).as_posix()] = dict(
             size=path.stat().st_size, sha256=sha256(path)
         )
@@ -276,6 +291,7 @@ def build(output, data, *, private_development=False):
     record = dict(
         format=1,
         version=project["version"],
+        profile=profile,
         source_revision=revision,
         scope="local Windows development installer; no public release approval",
         python=sys.version.split()[0],
@@ -287,7 +303,7 @@ def build(output, data, *, private_development=False):
     (output / "payload-manifest.json").write_text(
         json.dumps(record, ensure_ascii=False, indent=2), encoding="utf-8"
     )
-    write_file_list(output, [*files, "payload-manifest.json"])
+    write_file_list(output, [*files, "payload-manifest.json"], light=profile == "light")
     print(
         "Payload ready:",
         len(files),
@@ -302,6 +318,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--data", type=Path, default=ROOT / "experiments/offline-poc")
+    parser.add_argument("--profile", choices=["light", "full"], default="full")
     parser.add_argument(
         "--private-development",
         action="store_true",
@@ -316,4 +333,9 @@ if __name__ == "__main__":
             json.dumps(review("windows", MODEL_DIRS, private_development=args.private_development))
         )
         raise SystemExit(0)
-    build(args.output, args.data.resolve(), private_development=args.private_development)
+    build(
+        args.output,
+        args.data.resolve(),
+        private_development=args.private_development,
+        profile=args.profile,
+    )

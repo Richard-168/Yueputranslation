@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import random
 import threading
@@ -79,6 +80,8 @@ from .desktop_sidebar import HistorySplitter
 from .desktop_theme import STYLE, THEMES, palette, stylesheet
 from .inference_control import InferenceCancelled
 from .live_session import LiveSession, make_live_stream
+from .model_assets import GROUPS, ready
+from .model_dialog import ModelDialog
 from .paths import DATA_DIR
 from .preferences import (
     Preferences,
@@ -97,6 +100,7 @@ from .window_chrome import ChromeWindow
 ROOT = DATA_DIR
 WAITING_FOR_AUDIO = "音源已打开，但尚未收到新的音频包。请检查输入设备或播放来源。"
 NAMES = {"zh": "普通话", "yue": "粤语", "en": "英文"}
+VOICE_MODELS = {"zh": "tts-zh", "yue": "canto"}
 LOGO = Path(__file__).with_name("assets") / "yuepu-logo.png"
 WELCOME_LINES = (
     (5, "夜深了，想翻译点什么？", "夜喇，想譯啲咩？"),
@@ -540,6 +544,7 @@ class Window(ChromeWindow):
         settings_menu = QMenu(self.settings_button)
         settings_menu.setObjectName("settingsMenu")
         self.preferences_action = settings_menu.addAction("首选项…", self.settings)
+        self.models_action = settings_menu.addAction("模型管理…", self.model_manager)
         self.cloud_action = settings_menu.addAction("联网设置…", self.cloud_settings)
         settings_menu.addSeparator()
         appearance = settings_menu.addMenu("外观")
@@ -1043,6 +1048,7 @@ class Window(ChromeWindow):
             control.setEnabled(idle)
         self.settings_button.setEnabled(not self.closing)
         self.preferences_action.setEnabled(idle)
+        self.models_action.setEnabled(idle)
         self.cloud_action.setEnabled(idle)
         self.input.setReadOnly(self.closing)
         self.translate_button.setEnabled(can_submit and has_text)
@@ -1085,6 +1091,18 @@ class Window(ChromeWindow):
             if request.kind == "speak":
                 return False
             request = replace(request, autoplay=False)
+        folders = [] if request.kind == "speak" else ["hymt2"]
+        if request.kind == "file":
+            folders.append("asr-wenet")
+        if request.kind == "speak" or request.autoplay:
+            voice = (
+                request.source
+                if request.kind == "speak"
+                else ("zh" if request.source == "yue" else "yue")
+            )
+            folders.append(VOICE_MODELS[voice])
+        if not self.require_model_groups(folders):
+            return False
         self.sequence += 1
         key = self.sequence
         try:
@@ -1153,6 +1171,11 @@ class Window(ChromeWindow):
                 except (OSError, ValueError, RuntimeError) as exc:
                     self.status(str(exc), True)
                     return
+                folders = ["hymt2", "vad", "song-asr-large"]
+                if task.vocals:
+                    folders.append("song-separator")
+                if not self.require_model_groups(folders):
+                    return
                 self.song_keys.clear()
                 self.song_final_block = -1
                 self.song_session = task
@@ -1217,12 +1240,19 @@ class Window(ChromeWindow):
             return
         if not self.can_start_task():
             return
+        source, auto, mode = self.source_language(), self.auto_box.isChecked(), self.number_mode
+        folders = ["hymt2", "asr-wenet", "vad"]
+        if self.profile_box.currentIndex() == 1:
+            folders.append("song-asr-large")
+        if auto and self.source_box.currentIndex() == 0:
+            folders.append(VOICE_MODELS["zh" if source == "yue" else "yue"])
+        if not self.require_model_groups(folders):
+            return
         self.cancel.clear()
         self.listening = True
         self.capture_started = False
         self.capture_waiting = False
         self.capture_notice = ""
-        source, auto, mode = self.source_language(), self.auto_box.isChecked(), self.number_mode
         self.player.stop()
         self.song_keys.clear()
         self.live_versions.clear()
@@ -1844,6 +1874,41 @@ class Window(ChromeWindow):
         self.view.viewport().update()
         self.source_changed()
 
+    def model_manager(self, checked=False, *, group="base", intro=""):
+        if not self.can_start_task():
+            return
+        dialog = ModelDialog(self, group, intro, before_delete=self.engine.close)
+        dialog.exec()
+        dialog.deleteLater()
+
+    def require_model_groups(self, folders):
+        for group, (title, members) in GROUPS.items():
+            required = [folder for folder in folders if folder in members]
+            if ready(required):
+                continue
+            self.model_manager(group=group, intro=f"使用此功能需要准备「{title}」。")
+            if not ready(required):
+                self.status(f"「{title}」尚未就绪，可从设置打开模型管理。", True)
+                return False
+        return True
+
+    def guide_first_model_download(self):
+        if (
+            os.environ.get("YUEPU_LIGHT_INSTALL") == "1"
+            and not self.preferences.value("models/guide_seen", False, type=bool)
+            and not ready(GROUPS["base"][1])
+        ):
+            self.preferences.setValue("models/guide_seen", True)
+            self.model_manager(
+                intro="欢迎使用粤普同传。先下载或导入基础模型，准备好后即可离线使用。"
+            )
+            try:
+                defaults = load_preferences(self.preferences)
+            except (TypeError, ValueError):
+                return
+            previous, self.defaults = self.defaults, defaults
+            self.apply_preferences(previous)
+
     def settings(self):
         if self.pending or self.listening or self.closing:
             return
@@ -1910,4 +1975,5 @@ def main(*, muted=False):
     app.setStyleSheet(STYLE)
     window = Window(muted=muted)
     window.show()
+    QTimer.singleShot(0, window.guide_first_model_download)
     app.exec()
